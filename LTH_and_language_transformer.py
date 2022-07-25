@@ -179,6 +179,11 @@ dropout = 0.2         # dropout probability
 model   = TransformerModel(ntokens, emsize, nhead, d_hid, nlayers, dropout).to(device)
 # Finished defining the Model
 
+# Copying and Saving Initial State
+initial_state_dict = copy.deepcopy(model.state_dict())
+utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
+T.save(model, f"{os.getcwd()}/saves/model_state_dicts/initial_state_dict.pth.tar")
+
 # Specify the objective Function
 criterion = nn.CrossEntropyLoss()
 lr        = 5.0  # learning rate
@@ -253,18 +258,18 @@ def prune_by_percentile(percent: int) -> None:
     # Calculate percentile value
     i = 0
     for name, param in model.named_parameters():
-        # Best to rewrite this part, but will need a little time
-        # We do not prune bias term
+        # Using terminology of "Deconstructing Lottery Tickets"
+        # Not pruning bias term
         if 'weight' in name:
-            tensor = param.data.cpu().numpy()
-            alive = tensor[np.nonzero(tensor)]  # Flattened array of nonzero values
-            percentile_value = np.percentile(abs(alive), percent)  # Change to the other pruning criterion
+            w_c = param.data.cpu().numpy()                       # Current Weight
+            w_i = (initial_state_dict[name]).data.cpu().numpy()  # Initial Weight
+            percentile_value = np.percentile(abs(w_c[np.nonzero(w_c)]) - abs(w_i[np.nonzero(w_c)]), percent)
             # Convert Tensors to numpy and calculate
             weight_dev = param.device  # Get device
             # Sure? Looks like I want np.where(abs(tensor) < percentile_value, mask[i], 0) instead
-            new_mask = np.where(abs(tensor) < percentile_value, 0, mask[i])  # Change to the other pruning criterion
+            new_mask = np.where((abs(w_c) - abs(w_i)) < percentile_value, mask[i], 0)
             # Apply new weight and mask
-            param.data = T.from_numpy(tensor * new_mask).to(weight_dev)
+            param.data = T.from_numpy(w_c * new_mask).to(weight_dev)
             mask[i] = new_mask
             i += 1
 
@@ -298,7 +303,7 @@ def original_initialization(mask_temp:  list, initial_state_dict:  dict) -> None
 
 
 # Specify Hyperparams of the Pruning
-num_epochs       = 1  # Number of Epochs
+num_epochs       = 2  # Number of Epochs
 num_prune_cycles = 5   # Number of Pruning Cycles
 prune_percent    = 10  # Relative Percentage of Weights to be pruned in each Iteration
 print_freq       = 1   # Printing Frequency of Train- and Test Loss
@@ -315,11 +320,6 @@ np.random.seed(seed)
 
 # Main
 def main(experiment: int = 0, verbose: bool = False) -> None:
-    # Copying and Saving Initial State
-    initial_state_dict = copy.deepcopy(model.state_dict())
-    utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
-    T.save(model, f"{os.getcwd()}/saves/model_state_dicts/initial_state_dict.pth.tar")
-
     if verbose:
         # Print named params of the model
         for name, param in model.named_parameters():
