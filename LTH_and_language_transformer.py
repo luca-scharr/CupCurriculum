@@ -192,7 +192,6 @@ scheduler = T.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
 # Finished specifying the objective Function
 
 
-# TODO: Output überlegen
 # Function training the Model
 def train(epoch: int) -> float:
     epsilon      = 1e-6  # Possible that smaller is needed depending on the datatype used
