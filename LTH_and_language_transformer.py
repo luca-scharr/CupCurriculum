@@ -252,7 +252,6 @@ def evaluate(eval_data: Tensor) -> float:
     return total_loss / (len(eval_data) - 1)
 
 
-# TODO: Change to other pruning criterion, initial_state_dict might be helpful
 # Prune by Percentile module
 def prune_by_percentile(percent: int) -> None:
     # Calculate percentile value
