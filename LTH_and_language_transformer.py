@@ -264,8 +264,7 @@ def prune_by_percentile(percent: int) -> None:
             percentile_value = np.percentile(abs(w_c[np.nonzero(w_c)]) - abs(w_i[np.nonzero(w_c)]), percent)
             # Convert Tensors to numpy and calculate
             weight_dev = param.device  # Get device
-            # Sure? Looks like I want np.where(abs(tensor) < percentile_value, mask[i], 0) instead
-            new_mask = np.where((abs(w_c) - abs(w_i)) < percentile_value, mask[i], 0)
+            new_mask = np.where((abs(w_c) - abs(w_i)) > percentile_value, mask[i], 0)
             # Apply new weight and mask
             param.data = T.from_numpy(w_c * new_mask).to(weight_dev)
             mask[i] = new_mask
@@ -302,7 +301,7 @@ def original_initialization(mask_temp:  list, initial_state_dict:  dict) -> None
 
 # Specify Hyperparams of the Pruning
 num_epochs       = 2  # Number of Epochs
-num_prune_cycles = 5   # Number of Pruning Cycles
+num_prune_cycles = 2   # Number of Pruning Cycles
 prune_percent    = 10  # Relative Percentage of Weights to be pruned in each Iteration
 print_freq       = 1   # Printing Frequency of Train- and Test Loss
 test_freq        = 1   # Testing Frequency
@@ -343,6 +342,7 @@ def main(experiment: int = 0, verbose: bool = False) -> None:
             original_initialization(mask, initial_state_dict)
 
         # List fraction of remaining Weights per layer
+        print()
         comp1 = utils.print_nonzeros(model)
         comp[_ite] = comp1
 
