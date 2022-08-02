@@ -329,11 +329,18 @@ def reintroduction(mask_temp:  list, choice: str = "old", model_state: dict = No
 
 
 # Specify Hyperparams of the Pruning
-num_epochs       = 2  # Number of Epochs
+num_epochs_prune = 2  # Number of Epochs per pruning
 num_prune_cycles = 2   # Number of Pruning Cycles
 prune_percent    = 10  # Relative Percentage of Weights to be pruned in each Iteration
-print_freq       = 1   # Printing Frequency of Train- and Test Loss
-test_freq        = 1   # Testing Frequency
+print_freq_prune = 1   # Printing Frequency for pruning of Train- and Test Loss
+test_freq_prune  = 1   # Testing Frequency for pruning
+
+# Specify Hyperparams of the reintroduction
+num_epochs_reint = num_epochs_prune  # Number of Epochs per Reintialisation
+num_reint_cycles = num_prune_cycles  # Number of Reintialisation cycles
+print_freq_reint = print_freq_prune  # Printing Frequency for reinitialising of Train- and Test Loss
+test_freq_reint  = test_freq_prune   # Testing Frequency for reinitialising
+
 
 # Making Initial Mask
 mask      = make_mask()
@@ -361,13 +368,13 @@ def main(experiment: int = 0, verbose: bool = False) -> None:
     # Keeping track of performance
     best_val_loss  = np.inf
     best_val       = np.full(num_prune_cycles, np.inf)
-    all_train_loss = np.zeros(num_epochs, float)
-    all_val_loss   = np.zeros(num_epochs, float)
+    all_train_loss = np.zeros(num_epochs_prune, float)
+    all_val_loss   = np.zeros(num_epochs_prune, float)
 
     # Pruning procedure
     for _ite in range(num_prune_cycles):
         # Progressbar
-        pbar = tqdm(range(num_epochs))
+        pbar = tqdm(range(num_epochs_prune))
 
         # Masking procedure
         if not _ite == 0:
@@ -396,7 +403,7 @@ def main(experiment: int = 0, verbose: bool = False) -> None:
             # Training
             train_loss = train(iter_)
             # Testing
-            if iter_ % test_freq == 0:
+            if iter_ % test_freq_prune == 0:
                 val_loss = evaluate(val_data)
                 # Save Weights if best (might be unneccessary)
                 if val_loss < best_val_loss:
@@ -407,8 +414,8 @@ def main(experiment: int = 0, verbose: bool = False) -> None:
             all_val_loss[iter_]   = val_loss
             all_train_loss[iter_] = train_loss
             # Print training- and validation Loss
-            if iter_ % print_freq == 0:
-                pbar.set_description(f'Train Epoch: {iter_}/{num_epochs} training Loss: {train_loss:.6f} validation Loss: {val_loss:.2f}% Best valuation Loss: {best_val_loss:.2f}%')
+            if iter_ % print_freq_prune == 0:
+                pbar.set_description(f'Train Epoch: {iter_}/{num_epochs_prune} training Loss: {train_loss:.6f} validation Loss: {val_loss:.2f}% Best valuation Loss: {best_val_loss:.2f}%')
 
         writer.add_scalar('val_loss/test', best_val_loss, comp1)
         best_val[_ite] = best_val_loss
@@ -416,10 +423,10 @@ def main(experiment: int = 0, verbose: bool = False) -> None:
         # Saving relevant Data
         # Plotting training and validation Loss, Iteration Curve
         # NOTE training Loss is computed for every iteration
-        # while validation Loss is computed only for every {test_freq} iterations
+        # while validation Loss is computed only for every {test_freq_prune} iterations
         # Therefore validation Loss saved is constant during the iterations inbetween.
-        plt.plot(np.arange(1, num_epochs + 1), all_train_loss, c="blue", label="Training Loss")
-        plt.plot(np.arange(1, num_epochs + 1), all_val_loss, c="red", label="Validation Loss")
+        plt.plot(np.arange(1, num_epochs_prune + 1), all_train_loss, c="blue", label="Training Loss")
+        plt.plot(np.arange(1, num_epochs_prune + 1), all_val_loss, c="red", label="Validation Loss")
         plt.title(f"Training and Validation Loss Vs Iterations (WikiText2, Language Model)")
         plt.xlabel("Iterations")
         plt.ylabel("Loss")
@@ -436,8 +443,8 @@ def main(experiment: int = 0, verbose: bool = False) -> None:
 
         # Resetting variables to 0
         best_val_loss  = np.inf
-        all_train_loss = np.zeros(num_epochs, float)
-        all_val_loss   = np.zeros(num_epochs, float)
+        all_train_loss = np.zeros(num_epochs_prune, float)
+        all_val_loss   = np.zeros(num_epochs_prune, float)
 
     # Dumping Values for Plotting
     utils.checkdir(f"{os.getcwd()}/dumps/lt/")
