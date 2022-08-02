@@ -292,14 +292,40 @@ def make_mask() -> list:
 
 # Function to apply the Mask to the Network
 def original_initialization(mask_temp:  list, initial_state_dict:  dict) -> None:
-    step = 0
+    i = 0
     for name, param in model.named_parameters():
         if "weight" in name:
             weight_dev = param.device
-            param.data = T.from_numpy(mask_temp[step] * initial_state_dict[name].cpu().numpy()).to(weight_dev)
-            step = step + 1
+            param.data = T.from_numpy(mask_temp[i] * initial_state_dict[name].cpu().numpy()).to(weight_dev)
+            i = i + 1
         else:
             param.data = initial_state_dict[name]
+
+
+# Function implementing reintroduction schemes
+def reintroduction(mask_temp:  list, choice: str = "old", model_state: dict = None) -> None:
+    """
+    Input:
+        mask_temp   -> 0 denotes the capacity of the network that shall be reintroduced
+        model_state -> previous state of the model which may be considered in the reintroduction scheme
+        choice      -> can be anything from {"old";"rng"}, denotes the reintroduction scheme
+
+    Reintroduces previously pruned capacity in the network.
+    """
+    if choice == "old":
+        supplement = model_state
+    elif choice == "rng":
+        supplement = TransformerModel(ntokens, emsize, nhead, d_hid, nlayers, dropout)
+    else:
+        supplement = None
+        print(f"\nI do not know this choice of reintroduction scheme. Please be so kind and teach me.\n")
+        pass
+    i = 0
+    for name, param in model.named_parameters():
+        if "weight" in name:
+            weight_dev = param.device
+            param.data += T.from_numpy((1 - mask_temp[i]) * supplement[name].cpu().numpy()).to(weight_dev)
+            i = i + 1
 
 
 # Specify Hyperparams of the Pruning
@@ -310,7 +336,10 @@ print_freq       = 1   # Printing Frequency of Train- and Test Loss
 test_freq        = 1   # Testing Frequency
 
 # Making Initial Mask
-mask = make_mask()
+mask      = make_mask()
+
+# List of all masks generated during the algorithm
+mask_list = [mask]
 
 # Set Seed
 seed = 0
@@ -335,19 +364,26 @@ def main(experiment: int = 0, verbose: bool = False) -> None:
     all_train_loss = np.zeros(num_epochs, float)
     all_val_loss   = np.zeros(num_epochs, float)
 
+    # Pruning procedure
     for _ite in range(num_prune_cycles):
         # Progressbar
         pbar = tqdm(range(num_epochs))
 
         # Masking procedure
         if not _ite == 0:
-            # Copying and Saving Current State
+            # Saving Current State
             state_dict.append(copy.deepcopy(model.state_dict()))
             utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
             T.save(model, f"{os.getcwd()}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
             # Masking
             prune_by_percentile(prune_percent)
+            # Rewind to pruned version of initial state
             original_initialization(mask, initial_state_dict)
+            # Saving Mask
+            mask_list.append(mask)
+            utils.checkdir(f"{os.getcwd()}/dumps/lt/")
+            with open(f"{os.getcwd()}/dumps/lt/mask_{comp1}.pkl", 'wb') as fp:
+                pickle.dump(mask, fp)
 
         # List fraction of remaining Weights per layer
         print()
@@ -397,11 +433,6 @@ def main(experiment: int = 0, verbose: bool = False) -> None:
         utils.checkdir(f"{os.getcwd()}/dumps/lt/")
         all_train_loss.dump(f"{os.getcwd()}/dumps/lt/all_train_loss_{comp1}.dat")
         all_val_loss.dump(f"{os.getcwd()}/dumps/lt/all_val_loss_{comp1}.dat")
-
-        # Dumping mask
-        utils.checkdir(f"{os.getcwd()}/dumps/lt/")
-        with open(f"{os.getcwd()}/dumps/lt/mask_{comp1}.pkl", 'wb') as fp:
-            pickle.dump(mask, fp)
 
         # Resetting variables to 0
         best_val_loss  = np.inf
