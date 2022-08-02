@@ -184,6 +184,9 @@ initial_state_dict = copy.deepcopy(model.state_dict())
 utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
 T.save(model, f"{os.getcwd()}/saves/model_state_dicts/initial_state_dict.pth.tar")
 
+# List of Modelstates
+state_dict = [initial_state_dict]
+
 # Specify the objective Function
 criterion = nn.CrossEntropyLoss()
 lr        = 5.0  # learning rate
@@ -336,8 +339,13 @@ def main(experiment: int = 0, verbose: bool = False) -> None:
         # Progressbar
         pbar = tqdm(range(num_epochs))
 
-        # Masking
+        # Masking procedure
         if not _ite == 0:
+            # Copying and Saving Current State
+            state_dict.append(copy.deepcopy(model.state_dict()))
+            utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
+            T.save(model, f"{os.getcwd()}/saves/model_state_dicts/initial_state_dict.pth.tar")
+            # Masking
             prune_by_percentile(prune_percent)
             original_initialization(mask, initial_state_dict)
 
@@ -347,14 +355,14 @@ def main(experiment: int = 0, verbose: bool = False) -> None:
         comp[_ite] = comp1
 
         print(f"\n--- Pruning Level [{experiment}:{_ite}/{num_prune_cycles}]: ---")
-        # Pruning cycle
+        # Training and Testing cycle
         for iter_ in pbar:
             # Training
             train_loss = train(iter_)
             # Testing
             if iter_ % test_freq == 0:
                 val_loss = evaluate(val_data)
-                # Save Weights if best (maybe exchange and save all?)
+                # Save Weights if best (might be unneccessary)
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     utils.checkdir(f"{os.getcwd()}/saves/")
