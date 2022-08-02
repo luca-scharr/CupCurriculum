@@ -344,7 +344,7 @@ def main(experiment: int = 0, verbose: bool = False) -> None:
             # Copying and Saving Current State
             state_dict.append(copy.deepcopy(model.state_dict()))
             utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
-            T.save(model, f"{os.getcwd()}/saves/model_state_dicts/initial_state_dict.pth.tar")
+            T.save(model, f"{os.getcwd()}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
             # Masking
             prune_by_percentile(prune_percent)
             original_initialization(mask, initial_state_dict)
