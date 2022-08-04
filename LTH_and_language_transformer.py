@@ -187,16 +187,30 @@ T.save(model, f"{os.getcwd()}/saves/model_state_dicts/initial_state_dict.pth.tar
 # List of Modelstates
 state_dict = [initial_state_dict]
 
+# Specify Hyperparams of the Pruning
+num_epochs_prune = 2      # Number of Epochs per pruning, 50 seems reasonable
+num_prune_cycles = 2      # Number of Pruning Cycles, 28 is used in LTH paper
+prune_percent    = 19.91  # Relative Percentage of Weights to be pruned in each Iteration, 19.91 is used in LTH paper
+print_freq_prune = 1      # Printing Frequency for pruning of Train- and Test Loss
+test_freq_prune  = 1      # Testing Frequency for pruning
+
+# Specify Hyperparams of the reintroduction
+num_epochs_reint = num_epochs_prune  # Number of Epochs per Reintialisation
+num_reint_cycles = num_prune_cycles  # Number of Reintialisation cycles
+print_freq_reint = print_freq_prune  # Printing Frequency for reinitialising of Train- and Test Loss
+test_freq_reint  = test_freq_prune   # Testing Frequency for reinitialising
+
 # Specify the objective Function
 criterion = nn.CrossEntropyLoss()
 lr        = 5.0  # learning rate
 optimizer = T.optim.SGD(model.parameters(), lr=lr)
-scheduler = T.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
+scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(5, test_freq_prune))
+# lr = 5.0 and factor = 0.95 gives a maximum of 333 updates to lr before the update gets smaler than 1e-8
 # Finished specifying the objective Function
 
 
-# Function training the Model
-def train(epoch: int) -> float:
+# Function defining the training of the Model during the pruning procedure
+def train_prune(epoch: int) -> float:
     epsilon      = 1e-6  # Possible that smaller is needed depending on the datatype used
     total_loss   = 0.
     comp_loss    = 0.    # Used for comparison down below
@@ -237,7 +251,7 @@ def train(epoch: int) -> float:
     return total_loss / (len(train_data) - 1)
 
 
-# Function evaluating the Model
+# Function defining the evaluation of the Model
 def evaluate(eval_data: Tensor) -> float:
     model.eval()  # turn on evaluation mode
     total_loss = 0.
@@ -255,7 +269,7 @@ def evaluate(eval_data: Tensor) -> float:
 
 
 # Function pruning each layer by percentile
-def prune_by_percentile(percent: int) -> None:
+def prune_by_percentile(percent: float) -> None:
     # Calculate percentile value
     i = 0
     for name, param in model.named_parameters():
@@ -327,7 +341,7 @@ def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
         # Training and Testing cycle
         for iter_ in pbar:
             # Training
-            train_loss = train(iter_)
+            train_loss = train_prune(iter_)
             # Testing
             if iter_ % test_freq_prune == 0:
                 val_loss = evaluate(val_data)
@@ -342,6 +356,7 @@ def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
             # Print training- and validation Loss
             if iter_ % print_freq_prune == 0:
                 pbar.set_description(f'Train Epoch: {iter_}/{num_epochs_prune} training Loss: {train_loss:.6f} validation Loss: {val_loss:.2f}% Best valuation Loss: {best_val_loss:.2f}%')
+            scheduler.step(val_loss)
 
         writer.add_scalar('val_loss/test', best_val_loss, comp1)
         best_val[_ite] = best_val_loss
@@ -434,18 +449,9 @@ def reintroduction(mask_temp:  list, choice: str = "old", model_state: dict = No
             i = i + 1
 
 
-# Specify Hyperparams of the Pruning
-num_epochs_prune = 2  # Number of Epochs per pruning
-num_prune_cycles = 2   # Number of Pruning Cycles
-prune_percent    = 10  # Relative Percentage of Weights to be pruned in each Iteration
-print_freq_prune = 1   # Printing Frequency for pruning of Train- and Test Loss
-test_freq_prune  = 1   # Testing Frequency for pruning
-
-# Specify Hyperparams of the reintroduction
-num_epochs_reint = num_epochs_prune  # Number of Epochs per Reintialisation
-num_reint_cycles = num_prune_cycles  # Number of Reintialisation cycles
-print_freq_reint = print_freq_prune  # Printing Frequency for reinitialising of Train- and Test Loss
-test_freq_reint  = test_freq_prune   # Testing Frequency for reinitialising
+# Function defining the training of the model during the reintroduction procedure
+def train_reintro():
+    pass
 
 
 # Making Initial Mask
@@ -466,6 +472,7 @@ def main(rewind: bool = False, experiment: int = 0, verbose: bool = False) -> No
         # Print named params of the model
         for name, param in model.named_parameters():
             print(name, param.size())
+    # Warm up training?
 
     # Pruning procedure
     pruning_procedure(rewind, experiment)
