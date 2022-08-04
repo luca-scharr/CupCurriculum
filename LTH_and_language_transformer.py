@@ -254,7 +254,7 @@ def evaluate(eval_data: Tensor) -> float:
     return total_loss / (len(eval_data) - 1)
 
 
-# Prune by Percentile module
+# Function pruning each layer by percentile
 def prune_by_percentile(percent: int) -> None:
     # Calculate percentile value
     i = 0
@@ -302,6 +302,7 @@ def original_initialization(mask_temp:  list, initial_state_dict:  dict) -> None
             param.data = initial_state_dict[name]
 
 
+# Function defining the pruning procedure used
 def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
     # Compression Rate
     comp = np.zeros(num_prune_cycles, float)
