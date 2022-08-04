@@ -290,7 +290,7 @@ def make_mask() -> list:
     return mask
 
 
-# Function to apply the Mask to the Network
+# Function to apply the Mask to the Network and rewind
 def original_initialization(mask_temp:  list, initial_state_dict:  dict) -> None:
     i = 0
     for name, param in model.named_parameters():
@@ -300,6 +300,111 @@ def original_initialization(mask_temp:  list, initial_state_dict:  dict) -> None
             i = i + 1
         else:
             param.data = initial_state_dict[name]
+
+
+def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
+    # Compression Rate
+    comp = np.zeros(num_prune_cycles, float)
+
+    # Initialising storage for performance indicators
+    best_val_loss  = np.inf
+    best_val       = np.full(num_prune_cycles, np.inf)
+    all_train_loss = np.zeros(num_epochs_prune, float)
+    all_val_loss   = np.zeros(num_epochs_prune, float)
+
+    # Pruning cycle
+    for _ite in range(num_prune_cycles):
+        # Progressbar
+        pbar = tqdm(range(num_epochs_prune))
+
+        # List fraction of remaining Weights per layer
+        print()
+        comp1 = utils.print_nonzeros(model)
+        comp[_ite] = comp1
+
+        print(f"\n--- Pruning Level [{experiment}.{seed}:{_ite}/{num_prune_cycles}]: ---")
+        # Training and Testing cycle
+        for iter_ in pbar:
+            # Training
+            train_loss = train(iter_)
+            # Testing
+            if iter_ % test_freq_prune == 0:
+                val_loss = evaluate(val_data)
+                # Save Weights if best (might be unneccessary)
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    utils.checkdir(f"{os.getcwd()}/saves/")
+                    T.save(model, f"{os.getcwd()}/saves/{_ite}_model.pth.tar")
+            # Save training- and validation Loss
+            all_val_loss[iter_]   = val_loss
+            all_train_loss[iter_] = train_loss
+            # Print training- and validation Loss
+            if iter_ % print_freq_prune == 0:
+                pbar.set_description(f'Train Epoch: {iter_}/{num_epochs_prune} training Loss: {train_loss:.6f} validation Loss: {val_loss:.2f}% Best valuation Loss: {best_val_loss:.2f}%')
+
+        writer.add_scalar('val_loss/test', best_val_loss, comp1)
+        best_val[_ite] = best_val_loss
+
+        # Masking procedure
+        if not _ite == num_prune_cycles-1:
+            # Saving Current State
+            state_dict.append(copy.deepcopy(model.state_dict()))
+            utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
+            T.save(model, f"{os.getcwd()}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
+            # Masking
+            prune_by_percentile(prune_percent)
+            # Rewind to pruned version of initial state -> optional
+            if rewind:
+                original_initialization(mask, initial_state_dict)
+            # Saving Mask
+            mask_list.append(mask)
+            utils.checkdir(f"{os.getcwd()}/dumps/lt/")
+            with open(f"{os.getcwd()}/dumps/lt/mask_{comp1}.pkl", 'wb') as fp:
+                pickle.dump(mask, fp)
+
+        # Saving relevant Data
+        # Plotting training and validation Loss, Iteration Curve
+        # NOTE training Loss is computed for every iteration
+        # while validation Loss is computed only for every {test_freq_prune} iterations
+        # Therefore validation Loss saved is constant during the iterations inbetween.
+        plt.plot(np.arange(1, num_epochs_prune + 1), all_train_loss, c="blue", label="Training Loss")
+        plt.plot(np.arange(1, num_epochs_prune + 1), all_val_loss, c="red", label="Validation Loss")
+        plt.title(f"Training and Validation Loss Vs Iterations (WikiText2, Language Model)")
+        plt.xlabel("Iterations")
+        plt.ylabel("Loss")
+        plt.legend()
+        plt.grid(color="gray")
+        utils.checkdir(f"{os.getcwd()}/plots/lt/")
+        plt.savefig(f"{os.getcwd()}/plots/lt/TrainingVsValidationLoss_{comp1}.png", dpi=1200)
+        plt.close()
+
+        # Dump Plot values
+        utils.checkdir(f"{os.getcwd()}/dumps/lt/")
+        all_train_loss.dump(f"{os.getcwd()}/dumps/lt/all_train_loss_{comp1}.dat")
+        all_val_loss.dump(f"{os.getcwd()}/dumps/lt/all_val_loss_{comp1}.dat")
+
+        # Resetting variables to 0
+        best_val_loss  = np.inf
+        all_train_loss = np.zeros(num_epochs_prune, float)
+        all_val_loss   = np.zeros(num_epochs_prune, float)
+
+    # Dumping Values for Plotting
+    utils.checkdir(f"{os.getcwd()}/dumps/lt/")
+    comp.dump(f"{os.getcwd()}/dumps/lt/compression.dat")
+    best_val.dump(f"{os.getcwd()}/dumps/lt/best_val.dat")
+
+    # Plotting
+    a = np.arange(num_prune_cycles)
+    plt.plot(a, best_val, c="blue", label="Winning tickets")
+    plt.title(f"Validation Loss Vs Unpruned Weights Percentage (WikiText2, Language Model)")
+    plt.xlabel("Unpruned Weights Percentage")
+    plt.ylabel("Validation Loss")
+    plt.xticks(a, comp, rotation="vertical")
+    plt.legend()
+    plt.grid(color="gray")
+    utils.checkdir(f"{os.getcwd()}/plots/lt/")
+    plt.savefig(f"{os.getcwd()}/plots/lt/ValidationLossVsWeights.png", dpi=1200)
+    plt.close()
 
 
 # Function implementing reintroduction schemes
@@ -355,114 +460,14 @@ np.random.seed(seed)
 
 
 # Main
-def main(experiment: int = 0, verbose: bool = False) -> None:
+def main(rewind: bool = False, experiment: int = 0, verbose: bool = False) -> None:
     if verbose:
         # Print named params of the model
         for name, param in model.named_parameters():
             print(name, param.size())
 
-    # Pruning
-    # Compression Rate
-    comp = np.zeros(num_prune_cycles, float)
-
-    # Keeping track of performance
-    best_val_loss  = np.inf
-    best_val       = np.full(num_prune_cycles, np.inf)
-    all_train_loss = np.zeros(num_epochs_prune, float)
-    all_val_loss   = np.zeros(num_epochs_prune, float)
-
     # Pruning procedure
-    for _ite in range(num_prune_cycles):
-        # Progressbar
-        pbar = tqdm(range(num_epochs_prune))
-
-        # Masking procedure
-        if not _ite == 0:
-            # Saving Current State
-            state_dict.append(copy.deepcopy(model.state_dict()))
-            utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
-            T.save(model, f"{os.getcwd()}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
-            # Masking
-            prune_by_percentile(prune_percent)
-            # Rewind to pruned version of initial state
-            original_initialization(mask, initial_state_dict)
-            # Saving Mask
-            mask_list.append(mask)
-            utils.checkdir(f"{os.getcwd()}/dumps/lt/")
-            with open(f"{os.getcwd()}/dumps/lt/mask_{comp1}.pkl", 'wb') as fp:
-                pickle.dump(mask, fp)
-
-        # List fraction of remaining Weights per layer
-        print()
-        comp1 = utils.print_nonzeros(model)
-        comp[_ite] = comp1
-
-        print(f"\n--- Pruning Level [{experiment}:{_ite}/{num_prune_cycles}]: ---")
-        # Training and Testing cycle
-        for iter_ in pbar:
-            # Training
-            train_loss = train(iter_)
-            # Testing
-            if iter_ % test_freq_prune == 0:
-                val_loss = evaluate(val_data)
-                # Save Weights if best (might be unneccessary)
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    utils.checkdir(f"{os.getcwd()}/saves/")
-                    T.save(model, f"{os.getcwd()}/saves/{_ite}_model.pth.tar")
-            # Save training- and validation Loss
-            all_val_loss[iter_]   = val_loss
-            all_train_loss[iter_] = train_loss
-            # Print training- and validation Loss
-            if iter_ % print_freq_prune == 0:
-                pbar.set_description(f'Train Epoch: {iter_}/{num_epochs_prune} training Loss: {train_loss:.6f} validation Loss: {val_loss:.2f}% Best valuation Loss: {best_val_loss:.2f}%')
-
-        writer.add_scalar('val_loss/test', best_val_loss, comp1)
-        best_val[_ite] = best_val_loss
-
-        # Saving relevant Data
-        # Plotting training and validation Loss, Iteration Curve
-        # NOTE training Loss is computed for every iteration
-        # while validation Loss is computed only for every {test_freq_prune} iterations
-        # Therefore validation Loss saved is constant during the iterations inbetween.
-        plt.plot(np.arange(1, num_epochs_prune + 1), all_train_loss, c="blue", label="Training Loss")
-        plt.plot(np.arange(1, num_epochs_prune + 1), all_val_loss, c="red", label="Validation Loss")
-        plt.title(f"Training and Validation Loss Vs Iterations (WikiText2, Language Model)")
-        plt.xlabel("Iterations")
-        plt.ylabel("Loss")
-        plt.legend()
-        plt.grid(color="gray")
-        utils.checkdir(f"{os.getcwd()}/plots/lt/")
-        plt.savefig(f"{os.getcwd()}/plots/lt/TrainingVsValidationLoss_{comp1}.png", dpi=1200)
-        plt.close()
-
-        # Dump Plot values
-        utils.checkdir(f"{os.getcwd()}/dumps/lt/")
-        all_train_loss.dump(f"{os.getcwd()}/dumps/lt/all_train_loss_{comp1}.dat")
-        all_val_loss.dump(f"{os.getcwd()}/dumps/lt/all_val_loss_{comp1}.dat")
-
-        # Resetting variables to 0
-        best_val_loss  = np.inf
-        all_train_loss = np.zeros(num_epochs_prune, float)
-        all_val_loss   = np.zeros(num_epochs_prune, float)
-
-    # Dumping Values for Plotting
-    utils.checkdir(f"{os.getcwd()}/dumps/lt/")
-    comp.dump(f"{os.getcwd()}/dumps/lt/compression.dat")
-    best_val.dump(f"{os.getcwd()}/dumps/lt/best_val.dat")
-
-    # Plotting
-    a = np.arange(num_prune_cycles)
-    plt.plot(a, best_val, c="blue", label="Winning tickets")
-    plt.title(f"Validation Loss Vs Unpruned Weights Percentage (WikiText2, Language Model)")
-    plt.xlabel("Unpruned Weights Percentage")
-    plt.ylabel("Validation Loss")
-    plt.xticks(a, comp, rotation="vertical")
-    plt.legend()
-    plt.grid(color="gray")
-    utils.checkdir(f"{os.getcwd()}/plots/lt/")
-    plt.savefig(f"{os.getcwd()}/plots/lt/ValidationLossVsWeights.png", dpi=1200)
-    plt.close()
+    pruning_procedure(rewind, experiment)
 
 
 if __name__ == "__main__":
