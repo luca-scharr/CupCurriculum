@@ -196,7 +196,6 @@ test_freq_prune  = 1      # Testing Frequency for pruning
 
 # Specify Hyperparams of the reintroduction
 num_epochs_reint = num_epochs_prune  # Number of Epochs per Reintialisation
-num_reint_cycles = num_prune_cycles  # Number of Reintialisation cycles
 print_freq_reint = print_freq_prune  # Printing Frequency for reinitialising of Train- and Test Loss
 test_freq_reint  = test_freq_prune   # Testing Frequency for reinitialising
 
@@ -423,13 +422,29 @@ def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
     plt.close()
 
 
+# Function implementing symmetric difference for the masks
+def symmetric_difference() -> list:
+    sym_dif_list = []
+    for i in range(len(mask_list) - 1):
+        a = mask_list[i]
+        b = mask_list[i + 1]
+        sym_dif = copy.deepcopy(a)
+        for j in range(len(a)):
+            sym_dif[j].to(bool)
+            sym_dif[j][T.eq(a[j], b[j])] = False
+        sym_dif_list.append(sym_dif)
+    return sym_dif_list
+
+
 # Function implementing reintroduction schemes
-def reintroduction(mask_temp:  list, choice: str = "old", model_state: dict = None) -> None:
+def reintroduction(mask_dif:  list, choice: str = "old", model_state: dict = None) -> None:
     """
     Input:
-        mask_temp   -> 0 denotes the capacity of the network that shall be reintroduced
+        mask_dif    -> 1 denotes the capacity of the network that shall be reintroduced
         model_state -> previous state of the model which may be considered in the reintroduction scheme
         choice      -> can be anything from {"old";"rng"}, denotes the reintroduction scheme
+    Output:
+        None
 
     Reintroduces previously pruned capacity in the network.
     """
@@ -445,12 +460,67 @@ def reintroduction(mask_temp:  list, choice: str = "old", model_state: dict = No
     for name, param in model.named_parameters():
         if "weight" in name:
             weight_dev = param.device
-            param.data += T.from_numpy((1 - mask_temp[i]) * supplement[name].cpu().numpy()).to(weight_dev)
+            param.data += T.from_numpy(mask_dif[i] * supplement[name].cpu().numpy()).to(weight_dev)
             i = i + 1
 
 
 # Function defining the training of the model during the reintroduction procedure
 def train_reintro():
+    epsilon = 1e-6  # Possible that smaller is needed depending on the datatype used
+    total_loss = 0.
+    comp_loss = 0.  # Used for comparison down below
+    log_interval = 200
+    start_time = time.time()
+    src_mask = generate_square_subsequent_mask(bptt).to(device)
+    num_batches = len(train_data) // bptt
+    model.train()  # turn on train mode
+    for batch, i in enumerate(range(0, train_data.size(0) - 1, bptt)):
+        optimizer.zero_grad()
+        data_pts, targets = get_batch(train_data, i)
+        batch_size_local = data_pts.size(0)
+        if batch_size_local != bptt:  # only on last batch
+            src_mask = src_mask[:batch_size_local, :batch_size_local]
+        output = model(data_pts, src_mask)
+        t_loss = criterion(output.view(-1, ntokens), targets)
+        t_loss.backward()
+        # TODO:
+        # Manipulating the learningrate according to reintroduction time
+        for masking in mask_list:
+            for name, p in model.named_parameters():
+                if 'weight' in name:
+                    tensor = p.data.cpu().numpy()
+                    grad_tensor = p.grad.data.cpu().numpy()
+                    # TODO: Change this to adjust the learningrate
+                    grad_tensor[mask_difference] = grad_tensor[mask_difference]*factor
+                    p.grad.data = T.from_numpy(grad_tensor).to(device)
+        # Clipping Gradients
+        T.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        optimizer.step()
+        total_loss += t_loss.item()
+        if batch % log_interval == 0 and batch > 0:
+            ms_per_batch = (time.time() - start_time) * 1000 / log_interval
+            cur_loss = (total_loss - comp_loss) / log_interval
+            # ppl          = math.exp(cur_loss)
+            comp_loss = total_loss
+            print(f'| epoch {epoch:3d} | {batch:5d}/{num_batches:5d} batches | '
+                  f'lr {lr:02.2f} | ms/batch {ms_per_batch:5.2f} | '
+                  f'loss {cur_loss:5.2f}')  # | ppl {ppl:8.2f}')
+            start_time = time.time()
+    return total_loss / (len(train_data) - 1)
+
+
+# Function defining the procedure of regaining lost capacity
+def regaining_procedure():
+    """
+    while possible
+        reintroduction procedure
+        subsequent training scheme
+    """
+    s_d_mask_list = symmetric_difference()
+    s_d_mask_list.reverse()
+    state_dict.reverse()
+    for reintroduction_step in range(len(s_d_mask_list)):
+        # TODO: reintroduction()
     pass
 
 
@@ -472,10 +542,10 @@ def main(rewind: bool = False, experiment: int = 0, verbose: bool = False) -> No
         # Print named params of the model
         for name, param in model.named_parameters():
             print(name, param.size())
-    # Warm up training?
+    # Warm up training? For rewinding as little as one epoch is enough
 
     # Pruning procedure
-    pruning_procedure(rewind, experiment)
+    pruning_procedure(rewind, experiment)  # The Literature finds rewinding improving the performance when rewinded to warmup state
 
 
 if __name__ == "__main__":
