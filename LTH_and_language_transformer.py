@@ -513,7 +513,7 @@ def train_reintro(sym_dif_list: list, epoch: int) -> float:
 
 
 # Function defining the procedure of regaining lost capacity
-def regaining_procedure(experiment: int = 0) -> None:
+def regaining_procedure(experiment: int = 0, choice: str = "old") -> None:
     """
     while possible
         reintroduction procedure
@@ -535,7 +535,7 @@ def regaining_procedure(experiment: int = 0) -> None:
 
     for reint_step in range(len(s_d_mask_list)):  # Similar to _ite in pruning_procedure(); Number needed
         # Reintroduce the lifted mask
-        reintroduction(s_d_mask_list[reint_step], "old", state_dict[reint_step])
+        reintroduction(s_d_mask_list[reint_step], choice, state_dict[reint_step])
 
         # The following is similar to pruning_procedure()
         # Progressbar
@@ -635,15 +635,26 @@ np.random.seed(seed)
 
 
 # Main
-def main(rewind: bool = False, experiment: int = 0, verbose: bool = False) -> None:
-    if verbose:
-        # Print named params of the model
-        for name, param in model.named_parameters():
-            print(name, param.size())
+def main(rewind: bool = False, experiment: int = 0) -> None:
+    starting_time = time.time()
     # Warm up training? For rewinding as little as one epoch is enough
+
+    time_warmup = time.time()
+    print(f"Runtime of the warmup {time_warmup-starting_time} [s]")
 
     # Pruning procedure
     pruning_procedure(rewind, experiment)  # The Literature finds rewinding improving the performance when rewinded to warmup state
+    time_pruning = time.time()
+    print(f"Runtime of the pruning procedure {time_pruning-time_warmup} [s]")
+
+    # Reintroduction procedure
+
+    time_reintroduction = time.time()
+    print(f"Runtime of the reintroduction procedure {time_reintroduction-time_pruning} [s]")
+    utils.checkdir(f"{os.getcwd()}/saves/runtimes/")
+    times = T.tensor([time_warmup-starting_time, time_pruning-time_warmup, time_reintroduction-time_pruning, time_reintroduction-starting_time])
+    T.save(times, '{os.getcwd()}/saves/runtimes/tensor.pt')
+
 
 
 if __name__ == "__main__":
