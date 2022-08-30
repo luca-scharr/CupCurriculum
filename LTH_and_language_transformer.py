@@ -188,8 +188,8 @@ T.save(model, f"{os.getcwd()}/saves/model_state_dicts/initial_state_dict.pth.tar
 state_dict = [initial_state_dict]
 
 # Specify Hyperparams of the Pruning
-num_epochs_prune = 2      # Number of Epochs per pruning, 50 seems reasonable
-num_prune_cycles = 2      # Number of Pruning Cycles, 28 is used in LTH paper
+num_epochs_prune = 50     # Number of Epochs per pruning, 50 seems reasonable
+num_prune_cycles = 28     # Number of Pruning Cycles, 28 is used in LTH paper
 prune_percent    = 19.91  # Relative Percentage of Weights to be pruned in each Iteration, 19.91 is used in LTH paper
 print_freq_prune = 1      # Printing Frequency for pruning of Train- and Test Loss
 test_freq_prune  = 1      # Testing Frequency for pruning
@@ -298,7 +298,7 @@ def make_mask() -> list:
     for name, param in model.named_parameters():
         if 'weight' in name:
             tensor = param.data.cpu().numpy()
-            mask[i] = np.ones_like(tensor)  # Complete Mask of ones
+            mask[i] = np.ones_like(tensor)  # Complete Mask containing ones
             i = i + 1
     return mask
 
@@ -465,34 +465,36 @@ def reintroduction(mask_dif:  list, choice: str = "old", model_state: dict = Non
 
 
 # Function defining the training of the model during the reintroduction procedure
-def train_reintro():
-    epsilon = 1e-6  # Possible that smaller is needed depending on the datatype used
-    total_loss = 0.
-    comp_loss = 0.  # Used for comparison down below
+def train_reintro(sym_dif_list: list, epoch: int):
+    total_loss   = 0.
+    comp_loss    = 0.    # Used for comparison down below
     log_interval = 200
-    start_time = time.time()
-    src_mask = generate_square_subsequent_mask(bptt).to(device)
-    num_batches = len(train_data) // bptt
+    start_time   = time.time()
+    src_mask     = generate_square_subsequent_mask(bptt).to(device)
+    num_batches  = len(train_data) // bptt
     model.train()  # turn on train mode
     for batch, i in enumerate(range(0, train_data.size(0) - 1, bptt)):
         optimizer.zero_grad()
         data_pts, targets = get_batch(train_data, i)
-        batch_size_local = data_pts.size(0)
+        batch_size_local  = data_pts.size(0)
         if batch_size_local != bptt:  # only on last batch
             src_mask = src_mask[:batch_size_local, :batch_size_local]
         output = model(data_pts, src_mask)
         t_loss = criterion(output.view(-1, ntokens), targets)
         t_loss.backward()
-        # TODO:
         # Manipulating the learningrate according to reintroduction time
-        for masking in mask_list:
+        i = 0
+        for mask_difference in sym_dif_list:
+            factor = (1./0.95)**(i+1)  # The LR prior to the current LR, still up for discussion
+            i     += 1                 # Count pos in list; not using enumerate() as this way is more flexible. CHANGE?
+            j      = 0                 # Used to match position in mask with layer in the network
             for name, p in model.named_parameters():
                 if 'weight' in name:
-                    tensor = p.data.cpu().numpy()
                     grad_tensor = p.grad.data.cpu().numpy()
-                    # TODO: Change this to adjust the learningrate
-                    grad_tensor[mask_difference] = grad_tensor[mask_difference]*factor
+                    # Change this Part to adjust the learningrate
+                    grad_tensor[mask_difference[j]] = grad_tensor[mask_difference[j]]*factor
                     p.grad.data = T.from_numpy(grad_tensor).to(device)
+                    j += 1
         # Clipping Gradients
         T.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
@@ -520,7 +522,8 @@ def regaining_procedure():
     s_d_mask_list.reverse()
     state_dict.reverse()
     for reintroduction_step in range(len(s_d_mask_list)):
-        # TODO: reintroduction()
+        # TODO: reintroduction
+        reintroduction(s_d_mask_list[reintroduction_step], "old", state_dict[reintroduction_step])
     pass
 
 
