@@ -118,7 +118,7 @@ parser.add_argument("--nlayers", type=int, default=2, help="The Number of Encode
 parser.add_argument("--nhead", type=int, default=2, help="The Number of Heads used in the Multihead-Attention")
 parser.add_argument("--dropout", type=float, default=0.2, help="The Dropout Probability used in the Model")
 # Set Hyperparams defining the Pruning Procedure
-# TODO: Think about adding rewind option
+# TODO: Think about adding rewind option and number of warmup steps
 parser.add_argument("--num_prune_cycles", type=int, default=28, help="The Number of Pruning Cycles")
 parser.add_argument("--num_epochs_prune", type=int, default=50, help="The Number of Epochs per Pruning Cycle")
 parser.add_argument("--prune_percent", type=float, default=19.91, help="The Percentage of remaining Weights to be pruned in each Iteration")
@@ -204,11 +204,11 @@ class PositionalEncoding(nn.Module):
 
 
 # Building the Model to be trained
-model   = TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers, args.dropout).to(device)
+model = TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers, args.dropout).to(device)
 # Finished defining the Model
 
 # Copying and Saving Initial State
-initial_state_dict = copy.deepcopy(model.state_dict())
+initial_state_dict = copy.deepcopy(model.state_dict())  # TODO: Is it better to use this or warmup_state_dict?
 utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
 T.save(model, f"{os.getcwd()}/saves/model_state_dicts/initial_state_dict.pth.tar")
 
@@ -223,6 +223,46 @@ optimizer = T.optim.SGD(model.parameters(), lr=lr)
 scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(5, args.test_freq_prune))
 # lr = 5.0 and factor = 0.95 gives a maximum of 333 updates to lr before the update gets smaler than 1e-8
 # Finished specifying the objective Function
+
+
+# Function defining the Warm-Up Procedure used
+def warmup(num_warmup = 5):
+    # Progressbar
+    bar = tqdm(range(num_warmup))
+    for epoch in bar:
+        total_loss   = 0.
+        comp_loss    = 0.  # Used for comparison down below
+        log_interval = 200
+        start_time   = time.time()
+        src_mask     = generate_square_subsequent_mask(args.bptt).to(device)
+        num_batches  = len(train_data) // args.bptt
+        model.train()  # turn on train mode
+        for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
+            optimizer.zero_grad()
+            data_pts, targets = get_batch(train_data, i)
+            batch_size_local = data_pts.size(0)
+            if batch_size_local != args.bptt:  # only on last batch
+                src_mask = src_mask[:batch_size_local, :batch_size_local]
+            output = model(data_pts, src_mask)
+            t_loss = criterion(output.view(-1, args.ntokens), targets)
+            t_loss.backward()
+            # Clipping Gradients
+            T.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+            optimizer.step()
+            total_loss += t_loss.item()
+            if batch % log_interval == 0 and batch > 0:
+                ms_per_batch = (time.time() - start_time) * 1000 / log_interval
+                cur_loss = (total_loss - comp_loss) / log_interval
+                # ppl          = math.exp(cur_loss)
+                comp_loss = total_loss
+                print(f'| epoch {epoch:3d} | {batch:5d}/{num_batches:5d} batches | '
+                      f'lr {lr:02.2f} | ms/batch {ms_per_batch:5.2f} | '
+                      f'loss {cur_loss:5.2f}')  # | ppl {ppl:8.2f}')
+                start_time = time.time()
+    # Copying and Saving State after Warm-Up
+    utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
+    T.save(model, f"{os.getcwd()}/saves/model_state_dicts/warmup_state_dict.pth.tar")
+    pass
 
 
 # Function defining the training of the Model during the pruning procedure
@@ -651,22 +691,25 @@ np.random.seed(seed)
 
 
 # Main
-def main(rewind: bool = False, experiment: int = 0) -> None:
+def main(rewind: bool = False, experiment: int = 0, choice: str = "old") -> None:
     starting_time = time.time()
-    # Warm up training? For rewinding as little as one epoch is enough
-
+    # Warm-Up Training? For rewinding as little as one epoch is enough
+    warmup()
+    warmup_state_dict = copy.deepcopy(model.state_dict())  # TODO: Is it better to use this or warmup_state_dict?
     time_warmup = time.time()
     print(f"Runtime of the warmup {time_warmup-starting_time} [s]")
 
-    # Pruning procedure
+    # Pruning Procedure
     pruning_procedure(rewind, experiment)  # The Literature finds rewinding improving the performance when rewinded to warmup state
     time_pruning = time.time()
     print(f"Runtime of the pruning procedure {time_pruning-time_warmup} [s]")
 
-    # Reintroduction procedure
-
+    # Reintroduction Procedure
+    regaining_procedure(experiment, choice)
     time_reintroduction = time.time()
     print(f"Runtime of the reintroduction procedure {time_reintroduction-time_pruning} [s]")
+
+    # Show and Save Timings
     print(f"Runtime overall {time_reintroduction - starting_time} [s]")
     utils.checkdir(f"{os.getcwd()}/saves/runtimes/")
     times = T.tensor([time_warmup-starting_time, time_pruning-time_warmup,
