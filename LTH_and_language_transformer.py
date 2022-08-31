@@ -1,34 +1,39 @@
 # Importing Libraries
-import argparse
-import copy
 import os
 import sys
-import numpy as np
-from tqdm import tqdm
-import torch as T
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as opt
-from torch.utils.data import DataLoader
-import matplotlib.pyplot as plt
-import os
-from tensorboardX import SummaryWriter
-import seaborn as sns
-import torch.nn.init as init
-import pickle
-import math
+import argparse
 from typing import Tuple
+from tensorboardX import SummaryWriter
+import copy
+import time
+import math
+import numpy as np
+import pickle
 
+# Progressbar
+from tqdm import tqdm
+
+# Plotting
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Highlevel from Pytorch
+import torch as T
 from torch import nn, Tensor
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
-from torch.utils.data import dataset
+import torch.optim as opt
 
+# Neural Network parts from Pytorch
+from torch.nn import TransformerEncoder, TransformerEncoderLayer, init
+import torch.nn.functional as F
+
+# Pytorch's Dataset and Dataloader
+from torch.utils.data import dataset
+from torch.utils.data import DataLoader
+
+# Dataset used
 from torchtext.datasets import WikiText2
 from torchtext.data.utils import get_tokenizer
 from torchtext.vocab import build_vocab_from_iterator
-
-import copy
-import time
 
 # Custom Libraries
 import utils
@@ -651,10 +656,11 @@ def main(rewind: bool = False, experiment: int = 0) -> None:
 
     time_reintroduction = time.time()
     print(f"Runtime of the reintroduction procedure {time_reintroduction-time_pruning} [s]")
+    print(f"Runtime overall {time_reintroduction - starting_time} [s]")
     utils.checkdir(f"{os.getcwd()}/saves/runtimes/")
-    times = T.tensor([time_warmup-starting_time, time_pruning-time_warmup, time_reintroduction-time_pruning, time_reintroduction-starting_time])
+    times = T.tensor([time_warmup-starting_time, time_pruning-time_warmup,
+                      time_reintroduction-time_pruning, time_reintroduction-starting_time])
     T.save(times, '{os.getcwd()}/saves/runtimes/tensor.pt')
-
 
 
 if __name__ == "__main__":
