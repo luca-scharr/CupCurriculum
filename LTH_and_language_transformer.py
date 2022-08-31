@@ -82,7 +82,7 @@ def get_batch(source: Tensor, i: int) -> Tuple[Tensor, Tensor]:
         tuple (data, target), where data has shape [seq_len, batch_size] and
         target has shape [seq_len * batch_size]
     """
-    seq_len = min(bptt, len(source) - 1 - i)
+    seq_len = min(args.bptt, len(source) - 1 - i)
     data    = source[i:i + seq_len]
     target  = source[i + 1:i + 1 + seq_len].reshape(-1)
     return data, target
@@ -100,19 +100,47 @@ train_data = data_process(train_iter)
 val_data   = data_process(val_iter)
 test_data  = data_process(test_iter)
 
+# Use a Parser to specify Hyperparams etc.
+parser = argparse.ArgumentParser()
+# TODO: Think about adding the seed or experiment number
+# TODO: Change the {utils.checkdir(f"{os.getcwd()}/some/path/")} expressions to something like
+# TODO: {utils.checkdir(f"{os.getcwd()}/some/path/Seed{seed}/")} or {utils.checkdir(f"{os.getcwd()}/some/path/Experiment{experiment}/")}
+# TODO: Obviously change the save commands as well
 # Set Hyperparams for Batches
-batch_size      = 20
-eval_batch_size = 10
-bptt            = 35
+parser.add_argument("--batch_size", type=int, default=20, help="The Batchsize used for Training")
+parser.add_argument("--eval_batch_size", type=int, default=10, help="The Batchsize used for Evaluation")
+parser.add_argument("--bptt", type=int, default=35, help="The Length of Backpropagation through Time")
+# Set Hyperparams specifying the Model
+parser.add_argument("--ntokens", type=int, default=len(vocab), help="The Number of Tokens used by the Model")
+parser.add_argument("--emsize", type=int, default=200, help="The Embedding Dimension used by the Model")
+parser.add_argument("--d_hid", type=int, default=200, help="The Dimension of the FFN Model used in the Encoder")
+parser.add_argument("--nlayers", type=int, default=2, help="The Number of Encoderlayers used in the Encoder")
+parser.add_argument("--nhead", type=int, default=2, help="The Number of Heads used in the Multihead-Attention")
+parser.add_argument("--dropout", type=float, default=0.2, help="The Dropout Probability used in the Model")
+# Set Hyperparams defining the Pruning Procedure
+# TODO: Think about adding rewind option
+parser.add_argument("--num_prune_cycles", type=int, default=28, help="The Number of Pruning Cycles")
+parser.add_argument("--num_epochs_prune", type=int, default=50, help="The Number of Epochs per Pruning Cycle")
+parser.add_argument("--prune_percent", type=float, default=19.91, help="The Percentage of remaining Weights to be pruned in each Iteration")
+parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printing-Frequency of Train- and Test Loss during Pruning")
+parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
+# Set Hyperparams defining the Reintroduction Procedure
+# TODO: Think about adding choice option (selecting reintroduction scheme)
+parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintialisation")
+parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reinitialisation")
+parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reinitialisation")
+# TODO: Think about adding LR, the Factor used in scheduler, etc.
+parser.add_argument("-v", "--verbosity", action="count", default=0)
+args = parser.parse_args()
+
 
 # Generate Batches inside the Datasets. NOT SHUFFLED
-train_data = batchify(train_data, batch_size)  # shape [seq_len, batch_size]
-val_data   = batchify(val_data, eval_batch_size)
-test_data  = batchify(test_data, eval_batch_size)
+train_data = batchify(train_data, args.batch_size)  # shape [seq_len, batch_size]
+val_data   = batchify(val_data, args.eval_batch_size)
+test_data  = batchify(test_data, args.eval_batch_size)
 # Finished preparing the Data
 
 
-# Building the Model to be trained
 # Defining the Architecture
 class TransformerModel(nn.Module):
     def __init__(self, ntoken: int, d_model: int, nhead: int, d_hid: int,
@@ -175,13 +203,8 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-ntokens = len(vocab)  # size of vocabulary
-emsize  = 200         # embedding dimension
-d_hid   = 200         # dimension of the feedforward network model in nn.TransformerEncoder
-nlayers = 2           # number of nn.TransformerEncoderLayer in nn.TransformerEncoder
-nhead   = 2           # number of heads in nn.MultiheadAttention
-dropout = 0.2         # dropout probability
-model   = TransformerModel(ntokens, emsize, nhead, d_hid, nlayers, dropout).to(device)
+# Building the Model to be trained
+model   = TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers, args.dropout).to(device)
 # Finished defining the Model
 
 # Copying and Saving Initial State
@@ -193,23 +216,11 @@ T.save(model, f"{os.getcwd()}/saves/model_state_dicts/initial_state_dict.pth.tar
 state_dict       = [initial_state_dict]
 reint_state_dict = []
 
-# Specify Hyperparams of the Pruning
-num_epochs_prune = 50     # Number of Epochs per pruning, 50 seems reasonable
-num_prune_cycles = 28     # Number of Pruning Cycles, 28 is used in LTH paper
-prune_percent    = 19.91  # Relative Percentage of Weights to be pruned in each Iteration, 19.91 is used in LTH paper
-print_freq_prune = 1      # Printing Frequency for pruning of Train- and Test Loss
-test_freq_prune  = 1      # Testing Frequency for pruning
-
-# Specify Hyperparams of the reintroduction
-num_epochs_reint = num_epochs_prune  # Number of Epochs per Reintialisation
-print_freq_reint = print_freq_prune  # Printing Frequency for reinitialising of Train- and Test Loss
-test_freq_reint  = test_freq_prune   # Testing Frequency for reinitialising
-
 # Specify the objective Function
 criterion = nn.CrossEntropyLoss()
 lr        = 5.0  # learning rate
 optimizer = T.optim.SGD(model.parameters(), lr=lr)
-scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(5, test_freq_prune))
+scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(5, args.test_freq_prune))
 # lr = 5.0 and factor = 0.95 gives a maximum of 333 updates to lr before the update gets smaler than 1e-8
 # Finished specifying the objective Function
 
@@ -221,17 +232,17 @@ def train_prune(epoch: int) -> float:
     comp_loss    = 0.    # Used for comparison down below
     log_interval = 200
     start_time   = time.time()
-    src_mask     = generate_square_subsequent_mask(bptt).to(device)
-    num_batches  = len(train_data) // bptt
+    src_mask     = generate_square_subsequent_mask(args.bptt).to(device)
+    num_batches  = len(train_data) // args.bptt
     model.train()  # turn on train mode
-    for batch, i in enumerate(range(0, train_data.size(0) - 1, bptt)):
+    for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
         optimizer.zero_grad()
         data_pts, targets = get_batch(train_data, i)
         batch_size_local  = data_pts.size(0)
-        if batch_size_local != bptt:  # only on last batch
+        if batch_size_local != args.bptt:  # only on last batch
             src_mask = src_mask[:batch_size_local, :batch_size_local]
         output = model(data_pts, src_mask)
-        t_loss = criterion(output.view(-1, ntokens), targets)
+        t_loss = criterion(output.view(-1, args.ntokens), targets)
         t_loss.backward()
         # Freezing Pruned weights by making their gradients Zero
         for name, p in model.named_parameters():
@@ -260,16 +271,16 @@ def train_prune(epoch: int) -> float:
 def evaluate(eval_data: Tensor) -> float:
     model.eval()  # turn on evaluation mode
     total_loss = 0.
-    src_mask = generate_square_subsequent_mask(bptt).to(device)
+    src_mask = generate_square_subsequent_mask(args.bptt).to(device)
     with T.no_grad():
-        for i in range(0, eval_data.size(0) - 1, bptt):
+        for i in range(0, eval_data.size(0) - 1, args.bptt):
             data_pts, targets = get_batch(eval_data, i)
             batch_size_local  = data_pts.size(0)
             data_pts, targets = data_pts.to(device), targets.to(device)
-            if batch_size_local != bptt:
+            if batch_size_local != args.bptt:
                 src_mask = src_mask[:batch_size_local, :batch_size_local]
             output      = model(data_pts, src_mask)
-            total_loss += batch_size_local * criterion(output.view(-1, ntokens), targets).item()
+            total_loss += batch_size_local * criterion(output.view(-1, args.ntokens), targets).item()
     return total_loss / (len(eval_data) - 1)
 
 
@@ -324,31 +335,31 @@ def original_initialization(mask_temp:  list, initial_state_dict:  dict) -> None
 # Function defining the pruning procedure used
 def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
     # Compression Rate
-    comp = np.zeros(num_prune_cycles, float)
+    comp = np.zeros(args.num_prune_cycles, float)
 
     # Initialising storage for performance indicators
     best_val_loss  = np.inf
-    best_val       = np.full(num_prune_cycles, np.inf)
-    all_train_loss = np.zeros(num_epochs_prune, float)
-    all_val_loss   = np.zeros(num_epochs_prune, float)
+    best_val       = np.full(args.num_prune_cycles, np.inf)
+    all_train_loss = np.zeros(args.num_epochs_prune, float)
+    all_val_loss   = np.zeros(args.num_epochs_prune, float)
 
     # Pruning cycle
-    for _ite in range(num_prune_cycles):
+    for _ite in range(args.num_prune_cycles):
         # Progressbar
-        pbar = tqdm(range(num_epochs_prune))
+        pbar = tqdm(range(args.num_epochs_prune))
 
         # List fraction of remaining Weights per layer
         print()
         comp1 = utils.print_nonzeros(model)
         comp[_ite] = comp1
 
-        print(f"\n--- Pruning Level [{experiment}.{seed}:{_ite}/{num_prune_cycles}]: ---")
+        print(f"\n--- Pruning Level [{experiment}.{seed}:{_ite}/{args.num_prune_cycles}]: ---")
         # Training and Testing cycle
         for iter_ in pbar:
             # Training
             train_loss = train_prune(iter_)
             # Testing
-            if iter_ % test_freq_prune == 0:
+            if iter_ % args.test_freq_prune == 0:
                 val_loss = evaluate(val_data)
                 # Save Weights if best (might be unneccessary)
                 if val_loss < best_val_loss:
@@ -359,21 +370,21 @@ def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
             all_val_loss[iter_]   = val_loss
             all_train_loss[iter_] = train_loss
             # Print training- and validation Loss
-            if iter_ % print_freq_prune == 0:
-                pbar.set_description(f'Train Epoch: {iter_}/{num_epochs_prune} training Loss: {train_loss:.6f} validation Loss: {val_loss:.2f}% Best validation Loss: {best_val_loss:.2f}%')
+            if iter_ % args.print_freq_prune == 0:
+                pbar.set_description(f'Train Epoch: {iter_}/{args.num_epochs_prune} training Loss: {train_loss:.6f} validation Loss: {val_loss:.2f}% Best validation Loss: {best_val_loss:.2f}%')
             scheduler.step(val_loss)
 
         writer.add_scalar('val_loss/test', best_val_loss, comp1)
         best_val[_ite] = best_val_loss
 
         # Masking procedure
-        if not _ite == num_prune_cycles-1:
+        if not _ite == args.num_prune_cycles-1:
             # Saving Current State
             state_dict.append(copy.deepcopy(model.state_dict()))
             utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
             T.save(model, f"{os.getcwd()}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
             # Masking
-            prune_by_percentile(prune_percent)
+            prune_by_percentile(args.prune_percent)
             # Rewind to pruned version of initial state -> optional
             if rewind:
                 original_initialization(mask, initial_state_dict)
@@ -388,8 +399,8 @@ def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
         # NOTE training Loss is computed for every iteration
         # while validation Loss is computed only for every {test_freq_prune} iterations
         # Therefore validation Loss saved is constant during the iterations inbetween.
-        plt.plot(np.arange(1, num_epochs_prune + 1), all_train_loss, c="blue", label="Training Loss")
-        plt.plot(np.arange(1, num_epochs_prune + 1), all_val_loss, c="red", label="Validation Loss")
+        plt.plot(np.arange(1, args.num_epochs_prune + 1), all_train_loss, c="blue", label="Training Loss")
+        plt.plot(np.arange(1, args.num_epochs_prune + 1), all_val_loss, c="red", label="Validation Loss")
         plt.title(f"Training and Validation Loss Vs Iterations (WikiText2, Language Model)")
         plt.xlabel("Iterations")
         plt.ylabel("Loss")
@@ -406,8 +417,8 @@ def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
 
         # Resetting variables to 0
         best_val_loss  = np.inf
-        all_train_loss = np.zeros(num_epochs_prune, float)
-        all_val_loss   = np.zeros(num_epochs_prune, float)
+        all_train_loss = np.zeros(args.num_epochs_prune, float)
+        all_val_loss   = np.zeros(args.num_epochs_prune, float)
 
     # Dumping Values for Plotting
     utils.checkdir(f"{os.getcwd()}/dumps/prune/")
@@ -415,7 +426,7 @@ def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
     best_val.dump(f"{os.getcwd()}/dumps/prune/best_val.dat")
 
     # Plotting
-    a = np.arange(num_prune_cycles)
+    a = np.arange(args.num_prune_cycles)
     plt.plot(a, best_val, c="blue", label="Winning tickets")
     plt.title(f"Validation Loss Vs Unpruned Weights Percentage (WikiText2, Language Model)")
     plt.xlabel("Unpruned Weights Percentage")
@@ -457,7 +468,7 @@ def reintroduction(mask_dif:  list, choice: str = "old", model_state: dict = Non
     if choice == "old":
         supplement = model_state
     elif choice == "rng":
-        supplement = TransformerModel(ntokens, emsize, nhead, d_hid, nlayers, dropout)
+        supplement = TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers, args.dropout)
     else:
         supplement = None
         print(f"\nI do not know this choice of reintroduction scheme. Please be so kind and teach me.\n")
@@ -476,22 +487,22 @@ def train_reintro(sym_dif_list: list, epoch: int) -> float:
     comp_loss    = 0.    # Used for comparison down below
     log_interval = 200
     start_time   = time.time()
-    src_mask     = generate_square_subsequent_mask(bptt).to(device)
-    num_batches  = len(train_data) // bptt
+    src_mask     = generate_square_subsequent_mask(args.bptt).to(device)
+    num_batches  = len(train_data) // args.bptt
     model.train()  # turn on train mode
-    for batch, i in enumerate(range(0, train_data.size(0) - 1, bptt)):
+    for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
         optimizer.zero_grad()
         data_pts, targets = get_batch(train_data, i)
         batch_size_local  = data_pts.size(0)
-        if batch_size_local != bptt:  # only on last batch
+        if batch_size_local != args.bptt:  # only on last batch
             src_mask = src_mask[:batch_size_local, :batch_size_local]
         output = model(data_pts, src_mask)
-        t_loss = criterion(output.view(-1, ntokens), targets)
+        t_loss = criterion(output.view(-1, args.ntokens), targets)
         t_loss.backward()
         # Manipulating the learningrate according to reintroduction time
         i = 0
         for mask_difference in sym_dif_list:
-            factor = (1./0.95)**(i+1)  # The LR prior to the current LR, still up for discussion
+            factor = (1./0.95)**(i+1)  # The LR prior to the current LR, up for discussion; 0.95 = factor in Scheduler
             i     += 1                 # Count pos in list; not using enumerate() as this way is more flexible. CHANGE?
             j      = 0                 # Used to match position in mask with layer in the network
             for name, p in model.named_parameters():
@@ -535,8 +546,8 @@ def regaining_procedure(experiment: int = 0, choice: str = "old") -> None:
     # Initialising storage for performance indicators
     best_val_loss  = np.inf
     best_val       = np.full(len(s_d_mask_list), np.inf)
-    all_train_loss = np.zeros(num_epochs_reint, float)
-    all_val_loss   = np.zeros(num_epochs_reint, float)
+    all_train_loss = np.zeros(args.num_epochs_reint, float)
+    all_val_loss   = np.zeros(args.num_epochs_reint, float)
 
     for reint_step in range(len(s_d_mask_list)):  # Similar to _ite in pruning_procedure(); Number needed
         # Reintroduce the lifted mask
@@ -544,7 +555,7 @@ def regaining_procedure(experiment: int = 0, choice: str = "old") -> None:
 
         # The following is similar to pruning_procedure()
         # Progressbar
-        pbar = tqdm(range(num_epochs_reint))
+        pbar = tqdm(range(args.num_epochs_reint))
 
         # List fraction of remaining Weights per layer
         print()
@@ -557,7 +568,7 @@ def regaining_procedure(experiment: int = 0, choice: str = "old") -> None:
             # Training
             train_loss = train_reintro(s_d_mask_list[:reint_step+1], __iter)
             # Testing
-            if __iter % test_freq_reint == 0:
+            if __iter % args.test_freq_reint == 0:
                 val_loss = evaluate(val_data)
                 # Save Weights if best (might be unneccessary)
                 if val_loss < best_val_loss:
@@ -568,9 +579,9 @@ def regaining_procedure(experiment: int = 0, choice: str = "old") -> None:
             all_val_loss[__iter] = val_loss
             all_train_loss[__iter] = train_loss
             # Print training- and validation Loss
-            if __iter % print_freq_reint == 0:
+            if __iter % args.print_freq_reint == 0:
                 pbar.set_description(
-                    f'Train Epoch: {__iter}/{num_epochs_reint} training Loss: {train_loss:.6f} validation Loss: {val_loss:.2f}% Best validation Loss: {best_val_loss:.2f}%')
+                    f'Train Epoch: {__iter}/{args.num_epochs_reint} training Loss: {train_loss:.6f} validation Loss: {val_loss:.2f}% Best validation Loss: {best_val_loss:.2f}%')
             # TODO: Scheduler will regulate the lr down (no increase). This might be (very) bad. Solution?
             scheduler.step(val_loss)
 
@@ -587,8 +598,8 @@ def regaining_procedure(experiment: int = 0, choice: str = "old") -> None:
         # NOTE training Loss is computed for every iteration
         # while validation Loss is computed only for every {test_freq_prune} iterations
         # Therefore validation Loss saved is constant during the iterations inbetween.
-        plt.plot(np.arange(1, num_epochs_reint + 1), all_train_loss, c="blue", label="Training Loss")
-        plt.plot(np.arange(1, num_epochs_reint + 1), all_val_loss, c="red", label="Validation Loss")
+        plt.plot(np.arange(1, args.num_epochs_reint + 1), all_train_loss, c="blue", label="Training Loss")
+        plt.plot(np.arange(1, args.num_epochs_reint + 1), all_val_loss, c="red", label="Validation Loss")
         plt.title(f"Training and Validation Loss Vs Iterations (WikiText2, Language Model)")
         plt.xlabel("Iterations")
         plt.ylabel("Loss")
@@ -605,8 +616,8 @@ def regaining_procedure(experiment: int = 0, choice: str = "old") -> None:
 
         # Resetting variables to 0
         best_val_loss  = np.inf
-        all_train_loss = np.zeros(num_epochs_reint, float)
-        all_val_loss   = np.zeros(num_epochs_reint, float)
+        all_train_loss = np.zeros(args.num_epochs_reint, float)
+        all_val_loss   = np.zeros(args.num_epochs_reint, float)
 
     # Dumping Values for Plotting
     utils.checkdir(f"{os.getcwd()}/dumps/reint/")
@@ -628,7 +639,7 @@ def regaining_procedure(experiment: int = 0, choice: str = "old") -> None:
 
 
 # Making Initial Mask
-mask      = make_mask()
+mask = make_mask()
 
 # List of all masks generated during the algorithm
 mask_list = [mask]
