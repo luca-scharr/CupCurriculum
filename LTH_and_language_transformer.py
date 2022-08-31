@@ -119,9 +119,10 @@ parser.add_argument("--nhead", type=int, default=2, help="The Number of Heads us
 parser.add_argument("--dropout", type=float, default=0.2, help="The Dropout Probability used in the Model")
 # Set Hyperparams defining the Pruning Procedure
 # TODO: Think about adding rewind option and number of warmup steps
-parser.add_argument("--num_prune_cycles", type=int, default=28, help="The Number of Pruning Cycles")
+# Facebook Paper uses num_prune_cycles = 20 and prune_percent = 20. as well as 50,000 updates (overall?)
+parser.add_argument("--num_prune_cycles", type=int, default=20, help="The Number of Pruning Cycles")
 parser.add_argument("--num_epochs_prune", type=int, default=50, help="The Number of Epochs per Pruning Cycle")
-parser.add_argument("--prune_percent", type=float, default=19.91, help="The Percentage of remaining Weights to be pruned in each Iteration")
+parser.add_argument("--prune_percent", type=float, default=20., help="The Percentage of remaining Weights to be pruned in each Iteration")
 parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printing-Frequency of Train- and Test Loss during Pruning")
 parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
 # Set Hyperparams defining the Reintroduction Procedure
@@ -219,6 +220,7 @@ reint_state_dict = []
 # Specify the objective Function
 criterion = nn.CrossEntropyLoss()
 lr        = 5.0  # learning rate
+# Stated in Successfully applying ... (Aachen) Adafactor gives better results than Adam, they include warmup after reset
 optimizer = T.optim.SGD(model.parameters(), lr=lr)
 scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(5, args.test_freq_prune))
 # lr = 5.0 and factor = 0.95 gives a maximum of 333 updates to lr before the update gets smaler than 1e-8
