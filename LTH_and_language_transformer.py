@@ -335,7 +335,7 @@ def prune_by_percentile(percent: float) -> None:
         # Not pruning bias term
         if 'weight' in name:
             w_c = param.data.cpu().numpy()                       # Current Weight
-            w_i = (initial_state_dict[name]).data.cpu().numpy()  # Initial Weight
+            w_i = (initial_state_dict[name]).data.cpu().numpy()  # Initial Weight #TODO Exchange for warmup state dict
             percentile_value = np.percentile(abs(w_c[np.nonzero(w_c)]) - abs(w_i[np.nonzero(w_c)]), percent)
             # Convert Tensors to numpy and calculate
             weight_dev = param.device  # Get device
@@ -384,6 +384,8 @@ def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
     best_val       = np.full(args.num_prune_cycles, np.inf)
     all_train_loss = np.zeros(args.num_epochs_prune, float)
     all_val_loss   = np.zeros(args.num_epochs_prune, float)
+
+    # TODO: Warmup at every pruning iteration?
 
     # Pruning cycle
     for _ite in range(args.num_prune_cycles):
@@ -547,7 +549,7 @@ def train_reintro(sym_dif_list: list, epoch: int) -> float:
             factor = (1./0.95)**(i+1)  # The LR prior to the current LR, up for discussion; 0.95 = factor in Scheduler
             i     += 1                 # Count pos in list; not using enumerate() as this way is more flexible. CHANGE?
             j      = 0                 # Used to match position in mask with layer in the network
-            for name, p in model.named_parameters():
+            for name, p in model.named_parameters():  # Vektorisieren nachscahuen; Pytorch discussion seite
                 if 'weight' in name:
                     grad_tensor = p.grad.data.cpu().numpy()
                     # Change this Part to adjust the learningrate
@@ -697,7 +699,7 @@ def main(rewind: bool = False, experiment: int = 0, choice: str = "old") -> None
     starting_time = time.time()
     # Warm-Up Training? For rewinding as little as one epoch is enough
     warmup()
-    warmup_state_dict = copy.deepcopy(model.state_dict())  # TODO: Is it better to use this or warmup_state_dict?
+    warmup_state_dict = copy.deepcopy(model.state_dict())  # TODO: Is it better to use this or initial_state_dict?
     time_warmup = time.time()
     print(f"Runtime of the warmup {time_warmup-starting_time} [s]")
 
