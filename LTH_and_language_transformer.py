@@ -111,7 +111,7 @@ parser.add_argument("--batch_size", type=int, default=20, help="The Batchsize us
 parser.add_argument("--eval_batch_size", type=int, default=10, help="The Batchsize used for Evaluation")
 parser.add_argument("--bptt", type=int, default=35, help="The Length of Backpropagation through Time")
 # Set Hyperparams specifying the Model
-parser.add_argument("--ntokens", type=int, default=len(vocab), help="The Number of Tokens used by the Model")
+parser.add_argument("--ntokens", type=int, default=33280, help="The Number of Tokens used by the Model")
 parser.add_argument("--emsize", type=int, default=200, help="The Embedding Dimension used by the Model")
 parser.add_argument("--d_hid", type=int, default=200, help="The Dimension of the FFN Model used in the Encoder")
 parser.add_argument("--nlayers", type=int, default=2, help="The Number of Encoderlayers used in the Encoder")
@@ -228,7 +228,7 @@ scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor
 
 
 # Function defining the Warm-Up Procedure used
-def warmup(num_warmup = 5):
+def warmup(num_warmup: int = 5) -> None:
     # Progressbar
     bar = tqdm(range(num_warmup))
     for epoch in bar:
