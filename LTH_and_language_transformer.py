@@ -46,59 +46,7 @@ sns.set_style('darkgrid')
 
 # Setting the computing device
 device = T.device("cuda" if T.cuda.is_available() else "cpu")
-
-
-# Preparing the Data for usage
-# Function preprocessing the Data
-def data_process(raw_text_iter: dataset.IterableDataset) -> Tensor:
-    """Converts raw text into a flat Tensor."""
-    data = [T.tensor(vocab(tokenizer(item)), dtype=T.long) for item in raw_text_iter]
-    return T.cat(tuple(filter(lambda t: t.numel() > 0, data)))
-
-
-# Function preparing the generation of Batches
-def batchify(data: Tensor, bsz: int) -> Tensor:
-    """Divides the data into bsz separate sequences, removing extra elements
-    that wouldn't cleanly fit.
-    Args:
-        data: Tensor, shape [N]
-        bsz: int, batch size
-    Returns:
-        Tensor of shape [N // bsz, bsz]
-    """
-    seq_len = data.size(0) // bsz
-    data    = data[:seq_len * bsz]
-    data    = data.view(bsz, seq_len).t().contiguous()
-    return data.to(device)
-
-
-# Function returning Batches
-def get_batch(source: Tensor, i: int) -> Tuple[Tensor, Tensor]:
-    """
-    Args:
-        source: Tensor, shape [full_seq_len, batch_size]
-        i: int
-    Returns:
-        tuple (data, target), where data has shape [seq_len, batch_size] and
-        target has shape [seq_len * batch_size]
-    """
-    seq_len = min(args.bptt, len(source) - 1 - i)
-    data    = source[i:i + seq_len]
-    target  = source[i + 1:i + 1 + seq_len].reshape(-1)
-    return data, target
-
-
-# Build the vocabulary
-train_iter = WikiText2(split='train')
-tokenizer  = get_tokenizer('basic_english')
-vocab      = build_vocab_from_iterator(map(tokenizer, train_iter), specials=['<unk>'])
-vocab.set_default_index(vocab['<unk>'])
-
-# Create Datasets
-train_iter, val_iter, test_iter = WikiText2()
-train_data = data_process(train_iter)
-val_data   = data_process(val_iter)
-test_data  = data_process(test_iter)
+print(f"Using device: {device}")
 
 # Use a Parser to specify Hyperparams etc.
 parser = argparse.ArgumentParser()
@@ -108,7 +56,6 @@ parser = argparse.ArgumentParser()
 # TODO: Obviously change the save commands as well
 # Set Hyperparams for Batches
 parser.add_argument("--batch_size", type=int, default=20, help="The Batchsize used for Training")
-parser.add_argument("--eval_batch_size", type=int, default=10, help="The Batchsize used for Evaluation")
 parser.add_argument("--bptt", type=int, default=35, help="The Length of Backpropagation through Time")
 # Set Hyperparams specifying the Model
 parser.add_argument("--ntokens", type=int, default=33280, help="The Number of Tokens used by the Model")
@@ -120,14 +67,14 @@ parser.add_argument("--dropout", type=float, default=0.2, help="The Dropout Prob
 # Set Hyperparams defining the Pruning Procedure
 # TODO: Think about adding rewind option and number of warmup steps
 # Facebook Paper uses num_prune_cycles = 20 and prune_percent = 20. as well as 50,000 updates (overall?)
-parser.add_argument("--num_prune_cycles", type=int, default=20, help="The Number of Pruning Cycles")
-parser.add_argument("--num_epochs_prune", type=int, default=50, help="The Number of Epochs per Pruning Cycle")
+parser.add_argument("--num_prune_cycles", type=int, default=2, help="The Number of Pruning Cycles")  # 20
+parser.add_argument("--num_epochs_prune", type=int, default=50, help="The Number of Epochs per Pruning Cycle")  # 50
 parser.add_argument("--prune_percent", type=float, default=20., help="The Percentage of remaining Weights to be pruned in each Iteration")
 parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printing-Frequency of Train- and Test Loss during Pruning")
 parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
 # Set Hyperparams defining the Reintroduction Procedure
 # TODO: Think about adding choice option (selecting reintroduction scheme)
-parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintialisation")
+parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintialisation")  # 50
 parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reinitialisation")
 parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reinitialisation")
 # TODO: Think about adding LR, the Factor used in scheduler, etc.
@@ -136,9 +83,10 @@ args = parser.parse_args()
 
 
 # Generate Batches inside the Datasets. NOT SHUFFLED
-train_data = batchify(train_data, args.batch_size)  # shape [seq_len, batch_size]
-val_data   = batchify(val_data, args.eval_batch_size)
-test_data  = batchify(test_data, args.eval_batch_size)
+train_iter, test_iter, val_iter = WikiText2.iters(batch_size=args.batch_size)  # shape [seq_len, batch_size]
+"""train_iter.to(device)
+test_iter.to(device)
+val_iter.to(device)"""
 # Finished preparing the Data
 
 
@@ -237,29 +185,27 @@ def warmup(num_warmup: int = 5) -> None:
         log_interval = 200
         start_time   = time.time()
         src_mask     = generate_square_subsequent_mask(args.bptt).to(device)
-        num_batches  = len(train_data) // args.bptt
         model.train()  # turn on train mode
-        for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
+        for batch_num, batch in enumerate(train_iter):
             optimizer.zero_grad()
-            data_pts, targets = get_batch(train_data, i)
+            data_pts, targets = batch.text, batch.target
             batch_size_local = data_pts.size(0)
             if batch_size_local != args.bptt:  # only on last batch
                 src_mask = src_mask[:batch_size_local, :batch_size_local]
-            output = model(data_pts, src_mask)
-            t_loss = criterion(output.view(-1, args.ntokens), targets)
+            output = (model(data_pts, src_mask)).view(-1, args.ntokens)
+            t_loss = criterion(output, targets.view(output.size(0)))
             t_loss.backward()
             # Clipping Gradients
             T.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
             total_loss += t_loss.item()
-            if batch % log_interval == 0 and batch > 0:
+            if batch_num % log_interval == 0 and batch_num > 0:
                 ms_per_batch = (time.time() - start_time) * 1000 / log_interval
                 cur_loss = (total_loss - comp_loss) / log_interval
-                # ppl          = math.exp(cur_loss)
                 comp_loss = total_loss
-                print(f'| epoch {epoch:3d} | {batch:5d}/{num_batches:5d} batches | '
+                print(f'| epoch {epoch:3d} | {batch_num:5d}/{len(train_iter):5d} batches | '
                       f'lr {lr:02.2f} | ms/batch {ms_per_batch:5.2f} | '
-                      f'loss {cur_loss:5.2f}')  # | ppl {ppl:8.2f}')
+                      f'loss {cur_loss:5.2f}')
                 start_time = time.time()
     # Copying and Saving State after Warm-Up
     utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
@@ -275,16 +221,15 @@ def train_prune(epoch: int) -> float:
     log_interval = 200
     start_time   = time.time()
     src_mask     = generate_square_subsequent_mask(args.bptt).to(device)
-    num_batches  = len(train_data) // args.bptt
     model.train()  # turn on train mode
-    for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
+    for batch_num, batch in enumerate(train_iter):
         optimizer.zero_grad()
-        data_pts, targets = get_batch(train_data, i)
+        data_pts, targets = batch.text, batch.target
         batch_size_local  = data_pts.size(0)
         if batch_size_local != args.bptt:  # only on last batch
             src_mask = src_mask[:batch_size_local, :batch_size_local]
-        output = model(data_pts, src_mask)
-        t_loss = criterion(output.view(-1, args.ntokens), targets)
+        output = (model(data_pts, src_mask)).view(-1, args.ntokens)
+        t_loss = criterion(output, targets.view(output.size(0)))
         t_loss.backward()
         # Freezing Pruned weights by making their gradients Zero
         for name, p in model.named_parameters():
@@ -297,33 +242,31 @@ def train_prune(epoch: int) -> float:
         T.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
         total_loss += t_loss.item()
-        if batch % log_interval == 0 and batch > 0:
+        if batch_num % log_interval == 0 and batch_num > 0:
             ms_per_batch = (time.time() - start_time) * 1000 / log_interval
-            cur_loss     = (total_loss - comp_loss) / log_interval
-            # ppl          = math.exp(cur_loss)
+            cur_loss = (total_loss - comp_loss) / log_interval
             comp_loss = total_loss
-            print(f'| epoch {epoch:3d} | {batch:5d}/{num_batches:5d} batches | '
+            print(f'| epoch {epoch:3d} | {batch_num:5d}/{len(train_iter):5d} batches | '
                   f'lr {lr:02.2f} | ms/batch {ms_per_batch:5.2f} | '
-                  f'loss {cur_loss:5.2f}')  # | ppl {ppl:8.2f}')
+                  f'loss {cur_loss:5.2f}')
             start_time = time.time()
-    return total_loss / (len(train_data) - 1)
+    return total_loss / (args.batch_size * len(train_iter))  # Approximatley the Loss per Datapoint, a little smaler
 
 
 # Function defining the evaluation of the Model
-def evaluate(eval_data: Tensor) -> float:
+def evaluate() -> float:
     model.eval()  # turn on evaluation mode
     total_loss = 0.
     src_mask = generate_square_subsequent_mask(args.bptt).to(device)
     with T.no_grad():
-        for i in range(0, eval_data.size(0) - 1, args.bptt):
-            data_pts, targets = get_batch(eval_data, i)
+        for batch in val_iter:
+            data_pts, targets = batch.text, batch.target
             batch_size_local  = data_pts.size(0)
-            data_pts, targets = data_pts.to(device), targets.to(device)
             if batch_size_local != args.bptt:
                 src_mask = src_mask[:batch_size_local, :batch_size_local]
-            output      = model(data_pts, src_mask)
-            total_loss += batch_size_local * criterion(output.view(-1, args.ntokens), targets).item()
-    return total_loss / (len(eval_data) - 1)
+            output = (model(data_pts, src_mask)).view(-1, args.ntokens)
+            total_loss += batch_size_local * criterion(output, targets.view(output.size(0))).item()
+    return total_loss / (args.batch_size * len(val_iter))  # Approximatley the Loss per Datapoint, a little smaler
 
 
 # Function pruning each layer by percentile
@@ -404,7 +347,7 @@ def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
             train_loss = train_prune(iter_)
             # Testing
             if iter_ % args.test_freq_prune == 0:
-                val_loss = evaluate(val_data)
+                val_loss = evaluate()
                 # Save Weights if best (might be unneccessary)
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
@@ -415,7 +358,7 @@ def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
             all_train_loss[iter_] = train_loss
             # Print training- and validation Loss
             if iter_ % args.print_freq_prune == 0:
-                pbar.set_description(f'Train Epoch: {iter_}/{args.num_epochs_prune} training Loss: {train_loss:.6f} validation Loss: {val_loss:.2f}% Best validation Loss: {best_val_loss:.2f}%')
+                pbar.set_description(f'Train Epoch: {iter_}/{args.num_epochs_prune} Training Loss: {train_loss:.6f} Validation Loss: {val_loss:.2f}% Best Validation Loss: {best_val_loss:.2f}%')
             scheduler.step(val_loss)
 
         writer.add_scalar('val_loss/test', best_val_loss, comp1)
@@ -491,7 +434,7 @@ def symmetric_difference() -> list:
         b = mask_list[i + 1]
         sym_dif = copy.deepcopy(a)
         for j in range(len(a)):
-            sym_dif[j].to(bool)
+            sym_dif[j].astype(bool)
             sym_dif[j][T.eq(a[j], b[j])] = False
         sym_dif_list.append(sym_dif)
     return sym_dif_list
@@ -532,16 +475,15 @@ def train_reintro(sym_dif_list: list, epoch: int) -> float:
     log_interval = 200
     start_time   = time.time()
     src_mask     = generate_square_subsequent_mask(args.bptt).to(device)
-    num_batches  = len(train_data) // args.bptt
     model.train()  # turn on train mode
-    for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
+    for batch_num, batch in enumerate(train_iter):
         optimizer.zero_grad()
-        data_pts, targets = get_batch(train_data, i)
+        data_pts, targets = batch.text, batch.target
         batch_size_local  = data_pts.size(0)
         if batch_size_local != args.bptt:  # only on last batch
             src_mask = src_mask[:batch_size_local, :batch_size_local]
-        output = model(data_pts, src_mask)
-        t_loss = criterion(output.view(-1, args.ntokens), targets)
+        output = (model(data_pts, src_mask)).view(-1, args.ntokens)
+        t_loss = criterion(output, targets.view(output.size(0)))
         t_loss.backward()
         # Manipulating the learningrate according to reintroduction time
         i = 0
@@ -560,16 +502,16 @@ def train_reintro(sym_dif_list: list, epoch: int) -> float:
         T.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
         total_loss += t_loss.item()
-        if batch % log_interval == 0 and batch > 0:
+        if batch_num % log_interval == 0 and batch_num > 0:
             ms_per_batch = (time.time() - start_time) * 1000 / log_interval
             cur_loss = (total_loss - comp_loss) / log_interval
             # ppl          = math.exp(cur_loss)
             comp_loss = total_loss
-            print(f'| epoch {epoch:3d} | {batch:5d}/{num_batches:5d} batches | '
+            print(f'| epoch {epoch:3d} | {batch_num:5d}/{len(train_iter):5d} batches | '
                   f'lr {lr:02.2f} | ms/batch {ms_per_batch:5.2f} | '
-                  f'loss {cur_loss:5.2f}')  # | ppl {ppl:8.2f}')
+                  f'loss {cur_loss:5.2f}')
             start_time = time.time()
-    return total_loss / (len(train_data) - 1)
+    return total_loss / (args.batch_size * len(train_iter))  # Approximatley the Loss per Datapoint, a little smaler
 
 
 # Function defining the procedure of regaining lost capacity
@@ -613,7 +555,7 @@ def regaining_procedure(experiment: int = 0, choice: str = "old") -> None:
             train_loss = train_reintro(s_d_mask_list[:reint_step+1], __iter)
             # Testing
             if __iter % args.test_freq_reint == 0:
-                val_loss = evaluate(val_data)
+                val_loss = evaluate()
                 # Save Weights if best (might be unneccessary)
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
