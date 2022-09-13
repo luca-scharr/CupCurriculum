@@ -246,7 +246,7 @@ def train_prune(epoch: int) -> float:
                   f'lr {lr:02.2f} | ms/batch {ms_per_batch:5.2f} | '
                   f'loss {cur_loss:5.2f}')
             start_time = time.time()
-    return total_loss / (args.batch_size * len(train_iter))  # Approximatley the Loss per Datapoint, a little smaler
+    return total_loss / len(train_iter)  # Loss per Datapoint, a little smaler
 
 
 # Function defining the evaluation of the Model
@@ -507,7 +507,7 @@ def train_reintro(sym_dif_list: list, epoch: int) -> float:
                   f'lr {lr:02.2f} | ms/batch {ms_per_batch:5.2f} | '
                   f'loss {cur_loss:5.2f}')
             start_time = time.time()
-    return total_loss / (args.batch_size * len(train_iter))  # Approximatley the Loss per Datapoint, a little smaler
+    return total_loss / len(train_iter)  # Loss per Datapoint, a little smaler
 
 
 # Function defining the procedure of regaining lost capacity
