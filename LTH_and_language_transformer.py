@@ -46,7 +46,6 @@ sns.set_style('darkgrid')
 
 # Setting the computing device
 device = T.device("cuda" if T.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
 
 # Use a Parser to specify Hyperparams etc.
 parser = argparse.ArgumentParser()
@@ -84,9 +83,6 @@ args = parser.parse_args()
 
 # Generate Batches inside the Datasets. NOT SHUFFLED
 train_iter, test_iter, val_iter = WikiText2.iters(batch_size=args.batch_size)  # shape [seq_len, batch_size]
-"""train_iter.to(device)
-test_iter.to(device)
-val_iter.to(device)"""
 # Finished preparing the Data
 
 
@@ -188,7 +184,7 @@ def warmup(num_warmup: int = 5) -> None:
         model.train()  # turn on train mode
         for batch_num, batch in enumerate(train_iter):
             optimizer.zero_grad()
-            data_pts, targets = batch.text, batch.target
+            data_pts, targets = batch.text.to(device), batch.target.to(device)
             batch_size_local = data_pts.size(0)
             if batch_size_local != args.bptt:  # only on last batch
                 src_mask = src_mask[:batch_size_local, :batch_size_local]
@@ -224,7 +220,7 @@ def train_prune(epoch: int) -> float:
     model.train()  # turn on train mode
     for batch_num, batch in enumerate(train_iter):
         optimizer.zero_grad()
-        data_pts, targets = batch.text, batch.target
+        data_pts, targets = batch.text.to(device), batch.target.to(device)
         batch_size_local  = data_pts.size(0)
         if batch_size_local != args.bptt:  # only on last batch
             src_mask = src_mask[:batch_size_local, :batch_size_local]
@@ -260,7 +256,7 @@ def evaluate() -> float:
     src_mask = generate_square_subsequent_mask(args.bptt).to(device)
     with T.no_grad():
         for batch in val_iter:
-            data_pts, targets = batch.text, batch.target
+            data_pts, targets = batch.text.to(device), batch.target.to(device)
             batch_size_local  = data_pts.size(0)
             if batch_size_local != args.bptt:
                 src_mask = src_mask[:batch_size_local, :batch_size_local]
@@ -478,7 +474,7 @@ def train_reintro(sym_dif_list: list, epoch: int) -> float:
     model.train()  # turn on train mode
     for batch_num, batch in enumerate(train_iter):
         optimizer.zero_grad()
-        data_pts, targets = batch.text, batch.target
+        data_pts, targets = batch.text.to(device), batch.target.to(device)
         batch_size_local  = data_pts.size(0)
         if batch_size_local != args.bptt:  # only on last batch
             src_mask = src_mask[:batch_size_local, :batch_size_local]
@@ -638,6 +634,7 @@ np.random.seed(seed)
 
 # Main
 def main(rewind: bool = False, experiment: int = 0, choice: str = "old") -> None:
+    print(f"Using device: {device}")
     starting_time = time.time()
     # Warm-Up Training? For rewinding as little as one epoch is enough
     warmup()

@@ -1,8 +1,8 @@
-import LTH_and_language_transformer
+import LTH_and_language_transformer as LTH
 
 
 def main():
-    LTH_and_language_transformer.main()
+    LTH.main()
 
 
 if __name__ == "__main__":
