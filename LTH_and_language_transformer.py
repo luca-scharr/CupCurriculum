@@ -54,7 +54,7 @@ parser = argparse.ArgumentParser()
 # TODO: {utils.checkdir(f"{os.getcwd()}/some/path/Seed{seed}/")} or {utils.checkdir(f"{os.getcwd()}/some/path/Experiment{experiment}/")}
 # TODO: Obviously change the save commands as well
 # Set Hyperparams for Batches
-parser.add_argument("--batch_size", type=int, default=20, help="The Batchsize used for Training")
+parser.add_argument("--batch_size", type=int, default=100, help="The Batchsize used for Training")
 parser.add_argument("--bptt", type=int, default=35, help="The Length of Backpropagation through Time")
 # Set Hyperparams specifying the Model
 parser.add_argument("--ntokens", type=int, default=33280, help="The Number of Tokens used by the Model")
@@ -67,13 +67,13 @@ parser.add_argument("--dropout", type=float, default=0.2, help="The Dropout Prob
 # TODO: Think about adding rewind option and number of warmup steps
 # Facebook Paper uses num_prune_cycles = 20 and prune_percent = 20. as well as 50,000 updates (overall?)
 parser.add_argument("--num_prune_cycles", type=int, default=2, help="The Number of Pruning Cycles")  # 20
-parser.add_argument("--num_epochs_prune", type=int, default=50, help="The Number of Epochs per Pruning Cycle")  # 50
+parser.add_argument("--num_epochs_prune", type=int, default=2, help="The Number of Epochs per Pruning Cycle")  # 50
 parser.add_argument("--prune_percent", type=float, default=20., help="The Percentage of remaining Weights to be pruned in each Iteration")
 parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printing-Frequency of Train- and Test Loss during Pruning")
 parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
 # Set Hyperparams defining the Reintroduction Procedure
 # TODO: Think about adding choice option (selecting reintroduction scheme)
-parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintialisation")  # 50
+parser.add_argument("--num_epochs_reint", type=int, default=5, help="The Number of Epochs per Reintialisation")  # 50
 parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reinitialisation")
 parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reinitialisation")
 # TODO: Think about adding LR, the Factor used in scheduler, etc.
@@ -153,7 +153,7 @@ model = TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args
 # Finished defining the Model
 
 # Copying and Saving Initial State
-initial_state_dict = copy.deepcopy(model.state_dict())  # TODO: Is it better to use this or warmup_state_dict?
+initial_state_dict = copy.deepcopy(model.state_dict())
 utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
 T.save(model, f"{os.getcwd()}/saves/model_state_dicts/initial_state_dict.pth.tar")
 
@@ -200,7 +200,7 @@ def warmup(num_warmup: int = 5) -> None:
                 cur_loss = (total_loss - comp_loss) / log_interval
                 comp_loss = total_loss
                 print(f'| epoch {epoch:3d} | {batch_num:5d}/{len(train_iter):5d} batches | '
-                      f'lr {lr:02.2f} | ms/batch {ms_per_batch:5.2f} | '
+                      f'lr {optimizer.param_groups[0]["lr"]:02.2f} | ms/batch {ms_per_batch:5.2f} | '
                       f'loss {cur_loss:5.2f}')
                 start_time = time.time()
     # Copying and Saving State after Warm-Up
@@ -211,7 +211,6 @@ def warmup(num_warmup: int = 5) -> None:
 
 # Function defining the training of the Model during the pruning procedure
 def train_prune(epoch: int) -> float:
-    epsilon      = 1e-6  # Possible that smaller is needed depending on the datatype used
     total_loss   = 0.
     comp_loss    = 0.    # Used for comparison down below
     log_interval = 200
@@ -228,12 +227,11 @@ def train_prune(epoch: int) -> float:
         t_loss = criterion(output, targets.view(output.size(0)))
         t_loss.backward()
         # Freezing Pruned weights by making their gradients Zero
+        j = 0
         for name, p in model.named_parameters():
             if 'weight' in name:
-                tensor      = p.data.cpu().numpy()
-                grad_tensor = p.grad.data.cpu().numpy()
-                grad_tensor = np.where(tensor < epsilon, 0, grad_tensor)
-                p.grad.data = T.from_numpy(grad_tensor).to(device)
+                p.grad.data = p.grad.data * mask[j]
+                j += 1
         # Clipping Gradients
         T.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
@@ -243,7 +241,7 @@ def train_prune(epoch: int) -> float:
             cur_loss = (total_loss - comp_loss) / log_interval
             comp_loss = total_loss
             print(f'| epoch {epoch:3d} | {batch_num:5d}/{len(train_iter):5d} batches | '
-                  f'lr {lr:02.2f} | ms/batch {ms_per_batch:5.2f} | '
+                  f'lr {optimizer.param_groups[0]["lr"]:02.2f} | ms/batch {ms_per_batch:5.2f} | '
                   f'loss {cur_loss:5.2f}')
             start_time = time.time()
     return total_loss / len(train_iter)  # Loss per Datapoint, a little smaler
@@ -274,14 +272,13 @@ def prune_by_percentile(percent: float) -> None:
         # Not pruning bias term
         if 'weight' in name:
             w_c = param.data.cpu().numpy()                       # Current Weight
-            w_i = (initial_state_dict[name]).data.cpu().numpy()  # Initial Weight #TODO Exchange for warmup state dict
+            w_i = (initial_state_dict[name]).data.cpu().numpy()  # Initial Weight
             percentile_value = np.percentile(abs(w_c[np.nonzero(w_c)]) - abs(w_i[np.nonzero(w_c)]), percent)
             # Convert Tensors to numpy and calculate
-            weight_dev = param.device  # Get device
-            new_mask = np.where((abs(w_c) - abs(w_i)) > percentile_value, mask[i], 0)
+            new_mask = T.where(T.from_numpy(abs(w_c) - abs(w_i)) > percentile_value, mask[i].cpu(), 0)
             # Apply new weight and mask
-            param.data = T.from_numpy(w_c * new_mask).to(weight_dev)
-            mask[i] = new_mask
+            param.data = (T.from_numpy(w_c) * new_mask).to(param.device)
+            mask[i] = new_mask.to(device)
             i += 1
 
 
@@ -295,8 +292,7 @@ def make_mask() -> list:
     i = 0
     for name, param in model.named_parameters():
         if 'weight' in name:
-            tensor = param.data.cpu().numpy()
-            mask[i] = np.ones_like(tensor)  # Complete Mask containing ones
+            mask[i] = T.ones_like(param.data)  # Complete Mask containing ones
             i = i + 1
     return mask
 
@@ -340,6 +336,8 @@ def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
         # Training and Testing cycle
         for iter_ in pbar:
             # Training
+            print()
+            #mask
             train_loss = train_prune(iter_)
             # Testing
             if iter_ % args.test_freq_prune == 0:
@@ -354,28 +352,27 @@ def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
             all_train_loss[iter_] = train_loss
             # Print training- and validation Loss
             if iter_ % args.print_freq_prune == 0:
-                pbar.set_description(f'Train Epoch: {iter_}/{args.num_epochs_prune} Training Loss: {train_loss:.6f} Validation Loss: {val_loss:.2f}% Best Validation Loss: {best_val_loss:.2f}%')
+                pbar.set_description(f'Loss: {train_loss:.3f} Validation: {val_loss:.3f}')
             scheduler.step(val_loss)
 
         writer.add_scalar('val_loss/test', best_val_loss, comp1)
         best_val[_ite] = best_val_loss
 
         # Masking procedure
-        if not _ite == args.num_prune_cycles-1:
-            # Saving Current State
-            state_dict.append(copy.deepcopy(model.state_dict()))
-            utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
-            T.save(model, f"{os.getcwd()}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
-            # Masking
-            prune_by_percentile(args.prune_percent)
-            # Rewind to pruned version of initial state -> optional
-            if rewind:
-                original_initialization(mask, initial_state_dict)
-            # Saving Mask
-            mask_list.append(mask)
-            utils.checkdir(f"{os.getcwd()}/dumps/prune/")
-            with open(f"{os.getcwd()}/dumps/prune/mask_{comp1}.pkl", 'wb') as fp:
-                pickle.dump(mask, fp)
+        # Saving Current State
+        state_dict.append(copy.deepcopy(model.state_dict()))
+        utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
+        T.save(model, f"{os.getcwd()}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
+        # Masking
+        prune_by_percentile(args.prune_percent)
+        # Rewind to pruned version of initial state -> optional
+        if rewind:
+            original_initialization(mask, initial_state_dict)
+        # Saving Mask
+        mask_list.append(mask)
+        utils.checkdir(f"{os.getcwd()}/dumps/prune/")
+        with open(f"{os.getcwd()}/dumps/prune/mask_{comp1}.pkl", 'wb') as fp:
+            pickle.dump(mask, fp)
 
         # Saving relevant Data
         # Plotting training and validation Loss, Iteration Curve
@@ -430,8 +427,8 @@ def symmetric_difference() -> list:
         b = mask_list[i + 1]
         sym_dif = copy.deepcopy(a)
         for j in range(len(a)):
-            sym_dif[j].astype(bool)
-            sym_dif[j][T.eq(a[j], b[j])] = False
+            sym_dif[j] = sym_dif[j].astype(bool)
+            sym_dif[j][np.equal(a[j], b[j])] = False
         sym_dif_list.append(sym_dif)
     return sym_dif_list
 
@@ -504,7 +501,7 @@ def train_reintro(sym_dif_list: list, epoch: int) -> float:
             # ppl          = math.exp(cur_loss)
             comp_loss = total_loss
             print(f'| epoch {epoch:3d} | {batch_num:5d}/{len(train_iter):5d} batches | '
-                  f'lr {lr:02.2f} | ms/batch {ms_per_batch:5.2f} | '
+                  f'lr {optimizer.param_groups[0]["lr"]:02.2f} | ms/batch {ms_per_batch:5.2f} | '
                   f'loss {cur_loss:5.2f}')
             start_time = time.time()
     return total_loss / len(train_iter)  # Loss per Datapoint, a little smaler
@@ -548,6 +545,7 @@ def regaining_procedure(experiment: int = 0, choice: str = "old") -> None:
         # Training and Testing cycle
         for __iter in pbar:
             # Training
+            print()
             train_loss = train_reintro(s_d_mask_list[:reint_step+1], __iter)
             # Testing
             if __iter % args.test_freq_reint == 0:
@@ -563,7 +561,7 @@ def regaining_procedure(experiment: int = 0, choice: str = "old") -> None:
             # Print training- and validation Loss
             if __iter % args.print_freq_reint == 0:
                 pbar.set_description(
-                    f'Train Epoch: {__iter}/{args.num_epochs_reint} training Loss: {train_loss:.6f} validation Loss: {val_loss:.2f}% Best validation Loss: {best_val_loss:.2f}%')
+                    f'Loss: {train_loss:.3f} Validation: {val_loss:.3f}')
             # TODO: Scheduler will regulate the lr down (no increase). This might be (very) bad. Solution?
             scheduler.step(val_loss)
 
@@ -637,8 +635,8 @@ def main(rewind: bool = False, experiment: int = 0, choice: str = "old") -> None
     print(f"Using device: {device}")
     starting_time = time.time()
     # Warm-Up Training? For rewinding as little as one epoch is enough
-    warmup()
-    warmup_state_dict = copy.deepcopy(model.state_dict())  # TODO: Is it better to use this or initial_state_dict?
+    # warmup()
+    # warmup_state_dict = copy.deepcopy(model.state_dict())  # TODO: Is it better to use this or initial_state_dict?
     time_warmup = time.time()
     print(f"Runtime of the warmup {time_warmup-starting_time} [s]")
 
