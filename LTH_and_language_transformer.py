@@ -66,18 +66,18 @@ parser.add_argument("--dropout", type=float, default=0.2, help="The Dropout Prob
 # Set Hyperparams defining the Pruning Procedure
 # TODO: Think about adding rewind option and number of warmup steps
 # Facebook Paper uses num_prune_cycles = 20 and prune_percent = 20. as well as 50,000 updates (overall?)
-parser.add_argument("--num_prune_cycles", type=int, default=2, help="The Number of Pruning Cycles")  # 20
-parser.add_argument("--num_epochs_prune", type=int, default=2, help="The Number of Epochs per Pruning Cycle")  # 50
+parser.add_argument("--num_prune_cycles", type=int, default=20, help="The Number of Pruning Cycles")  # 20
+parser.add_argument("--num_epochs_prune", type=int, default=50, help="The Number of Epochs per Pruning Cycle")  # 50
 parser.add_argument("--prune_percent", type=float, default=20., help="The Percentage of remaining Weights to be pruned in each Iteration")
 parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printing-Frequency of Train- and Test Loss during Pruning")
 parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
 # Set Hyperparams defining the Reintroduction Procedure
 # TODO: Think about adding choice option (selecting reintroduction scheme)
-parser.add_argument("--num_epochs_reint", type=int, default=5, help="The Number of Epochs per Reintialisation")  # 50
+parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintialisation")  # 50
 parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reinitialisation")
 parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reinitialisation")
 # TODO: Think about adding LR, the Factor used in scheduler, etc.
-parser.add_argument("-v", "--verbosity", action="count", default=0)
+parser.add_argument("-v", "--verbosity", action="count", default=1)
 args = parser.parse_args()
 
 
@@ -302,15 +302,16 @@ def original_initialization(mask_temp:  list, initial_state_dict:  dict) -> None
     i = 0
     for name, param in model.named_parameters():
         if "weight" in name:
-            weight_dev = param.device
-            param.data = T.from_numpy(mask_temp[i] * initial_state_dict[name].cpu().numpy()).to(weight_dev)
+            param.data = (mask_temp[i].to(param.device) * initial_state_dict[name].to(param.device))
             i = i + 1
         else:
-            param.data = initial_state_dict[name]
+            param.data = initial_state_dict[name].to(param.device)
+    if args.verbosity >= 2:
+        print("rewinding complete")
 
 
 # Function defining the pruning procedure used
-def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
+def pruning_procedure(rewind: bool = True, experiment: int = 0) -> None:
     # Compression Rate
     comp = np.zeros(args.num_prune_cycles, float)
 
@@ -369,7 +370,7 @@ def pruning_procedure(rewind: bool = False, experiment: int = 0) -> None:
         if rewind:
             original_initialization(mask, initial_state_dict)
         # Saving Mask
-        mask_list.append(mask)
+        mask_list.append(copy.deepcopy(mask))
         utils.checkdir(f"{os.getcwd()}/dumps/prune/")
         with open(f"{os.getcwd()}/dumps/prune/mask_{comp1}.pkl", 'wb') as fp:
             pickle.dump(mask, fp)
@@ -427,8 +428,8 @@ def symmetric_difference() -> list:
         b = mask_list[i + 1]
         sym_dif = copy.deepcopy(a)
         for j in range(len(a)):
-            sym_dif[j] = sym_dif[j].astype(bool)
-            sym_dif[j][np.equal(a[j], b[j])] = False
+            sym_dif[j] = sym_dif[j].to(bool)
+            sym_dif[j][T.eq(a[j], b[j])] = False
         sym_dif_list.append(sym_dif)
     return sym_dif_list
 
@@ -456,8 +457,7 @@ def reintroduction(mask_dif:  list, choice: str = "old", model_state: dict = Non
     i = 0
     for name, param in model.named_parameters():
         if "weight" in name:
-            weight_dev = param.device
-            param.data += T.from_numpy(mask_dif[i] * supplement[name].cpu().numpy()).to(weight_dev)
+            param.data += (mask_dif[i].to(param.device) * supplement[name].to(param.device))
             i = i + 1
 
 
@@ -486,10 +486,8 @@ def train_reintro(sym_dif_list: list, epoch: int) -> float:
             j      = 0                 # Used to match position in mask with layer in the network
             for name, p in model.named_parameters():  # Vektorisieren nachscahuen; Pytorch discussion seite
                 if 'weight' in name:
-                    grad_tensor = p.grad.data.cpu().numpy()
                     # Change this Part to adjust the learningrate
-                    grad_tensor[mask_difference[j]] = grad_tensor[mask_difference[j]]*factor
-                    p.grad.data = T.from_numpy(grad_tensor).to(device)
+                    p.grad.data[mask_difference[j]] = p.grad.data[mask_difference[j]]*factor
                     j += 1
         # Clipping Gradients
         T.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
@@ -562,7 +560,7 @@ def regaining_procedure(experiment: int = 0, choice: str = "old") -> None:
             if __iter % args.print_freq_reint == 0:
                 pbar.set_description(
                     f'Loss: {train_loss:.3f} Validation: {val_loss:.3f}')
-            # TODO: Scheduler will regulate the lr down (no increase). This might be (very) bad. Solution?
+            # TODO: Scheduler will regulate the lr down (no increase). This might be (very) bad. Problem?
             scheduler.step(val_loss)
 
         writer.add_scalar('val_loss/test', best_val_loss, comp1)
@@ -622,7 +620,7 @@ def regaining_procedure(experiment: int = 0, choice: str = "old") -> None:
 mask = make_mask()
 
 # List of all masks generated during the algorithm
-mask_list = [mask]
+mask_list = [(copy.deepcopy(mask))]
 
 # Set Seed
 seed = 0
@@ -631,7 +629,7 @@ np.random.seed(seed)
 
 
 # Main
-def main(rewind: bool = False, experiment: int = 0, choice: str = "old") -> None:
+def main(rewind: bool = True, experiment: int = 0, choice: str = "old") -> None:
     print(f"Using device: {device}")
     starting_time = time.time()
     # Warm-Up Training? For rewinding as little as one epoch is enough
@@ -652,10 +650,10 @@ def main(rewind: bool = False, experiment: int = 0, choice: str = "old") -> None
 
     # Show and Save Timings
     print(f"Runtime overall {time_reintroduction - starting_time} [s]")
-    utils.checkdir(f"{os.getcwd()}/saves/runtimes/")
     times = T.tensor([time_warmup-starting_time, time_pruning-time_warmup,
                       time_reintroduction-time_pruning, time_reintroduction-starting_time])
-    T.save(times, '{os.getcwd()}/saves/runtimes/tensor.pt')
+    utils.checkdir(f"{os.getcwd()}/saves/runtimes/")
+    T.save(times, f'{os.getcwd()}/saves/runtimes/tensor.pt')
 
 
 if __name__ == "__main__":
