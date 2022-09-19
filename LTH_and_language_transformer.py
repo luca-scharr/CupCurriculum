@@ -65,15 +65,15 @@ parser.add_argument("--nhead", type=int, default=2, help="The Number of Heads us
 parser.add_argument("--dropout", type=float, default=0.2, help="The Dropout Probability used in the Model")
 # Set Hyperparams defining the Pruning Procedure
 # TODO: Think about adding rewind option and number of warmup steps
-# Facebook Paper uses num_prune_cycles = 20 and prune_percent = 20. as well as 50,000 updates (overall?)
-parser.add_argument("--num_prune_cycles", type=int, default=20, help="The Number of Pruning Cycles")  # 20
-parser.add_argument("--num_epochs_prune", type=int, default=50, help="The Number of Epochs per Pruning Cycle")  # 50
-parser.add_argument("--prune_percent", type=float, default=20., help="The Percentage of remaining Weights to be pruned in each Iteration")
+# Facebook Paper uses num_prune_cycles = 20 and prune_frac = 0.20 as well as 50,000 updates (overall?)
+parser.add_argument("--num_prune_cycles", type=int, default=3, help="The Number of Pruning Cycles")  # 20
+parser.add_argument("--num_epochs_prune", type=int, default=2, help="The Number of Epochs per Pruning Cycle")  # 50
+parser.add_argument("--prune_frac", type=float, default=0.20, help="The Fraction of remaining Weights to be pruned in each Iteration")
 parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printing-Frequency of Train- and Test Loss during Pruning")
 parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
 # Set Hyperparams defining the Reintroduction Procedure
 # TODO: Think about adding choice option (selecting reintroduction scheme)
-parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintialisation")  # 50
+parser.add_argument("--num_epochs_reint", type=int, default=2, help="The Number of Epochs per Reintialisation")  # 50
 parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reinitialisation")
 parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reinitialisation")
 # TODO: Think about adding LR, the Factor used in scheduler, etc.
@@ -264,22 +264,24 @@ def evaluate() -> float:
 
 
 # Function pruning each layer by percentile
-def prune_by_percentile(percent: float) -> None:
+def prune_by_percentile(pruning_cycle: int, percent: float) -> None:
     # Calculate percentile value
-    i = 0
+    j = 0
     for name, param in model.named_parameters():
         # Using terminology of "Deconstructing Lottery Tickets"
         # Not pruning bias term
         if 'weight' in name:
-            w_c = param.data.cpu().numpy()                       # Current Weight
-            w_i = (initial_state_dict[name]).data.cpu().numpy()  # Initial Weight
-            percentile_value = np.percentile(abs(w_c[np.nonzero(w_c)]) - abs(w_i[np.nonzero(w_c)]), percent)
-            # Convert Tensors to numpy and calculate
-            new_mask = T.where(T.from_numpy(abs(w_c) - abs(w_i)) > percentile_value, mask[i].cpu(), 0)
+            w_c = param.data.cpu()                       # Current Weight
+            w_i = (initial_state_dict[name]).data.cpu()  # Initial Weight
+            m_w = mask[j].cpu()                          # Mask for this Weight
+            dif = (abs(w_c) - abs(w_i))                  # Difference by wich pruned Weights are decided
+            dif = T.where(m_w != 0.,dif,float("-inf"))   # Make sure that all pruned Weights remain pruned
+            b,i = T.sort(dif.view(w_c.numel()))          # i gives the Information needed for pruning, b is irrelevant
+            m_w.view(w_c.numel())[i[:round(w_c.numel() * (1-(1-percent)**pruning_cycle))]] = 0  # int better?
             # Apply new weight and mask
-            param.data = (T.from_numpy(w_c) * new_mask).to(param.device)
-            mask[i] = new_mask.to(device)
-            i += 1
+            param.data = (w_c * m_w).to(param.device)
+            mask[j] = m_w.to(device)
+            j += 1
 
 
 # Function to make an empty mask of the same size as the model
@@ -320,8 +322,6 @@ def pruning_procedure(rewind: bool = True, experiment: int = 0) -> None:
     best_val       = np.full(args.num_prune_cycles, np.inf)
     all_train_loss = np.zeros(args.num_epochs_prune, float)
     all_val_loss   = np.zeros(args.num_epochs_prune, float)
-
-    # TODO: Warmup at every pruning iteration?
 
     # Pruning cycle
     for _ite in range(args.num_prune_cycles):
@@ -365,7 +365,7 @@ def pruning_procedure(rewind: bool = True, experiment: int = 0) -> None:
         utils.checkdir(f"{os.getcwd()}/saves/model_state_dicts/")
         T.save(model, f"{os.getcwd()}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
         # Masking
-        prune_by_percentile(args.prune_percent)
+        prune_by_percentile(_ite+1, args.prune_frac)
         # Rewind to pruned version of initial state -> optional
         if rewind:
             original_initialization(mask, initial_state_dict)
