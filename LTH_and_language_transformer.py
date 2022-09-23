@@ -47,7 +47,7 @@ device = T.device("cuda" if T.cuda.is_available() else "cpu")
 
 # Use a Parser to specify Hyperparams etc.
 parser = argparse.ArgumentParser()
-parser.add_argument("--experiment", type=str, default="Old_Dynamic", help="The Name of the Experiment setting")
+parser.add_argument("--experiment", type=str, default="old_dynamic", help="The Name of the Experiment setting")
 parser.add_argument("--seed", type=int, default=0, help="The Seed used for the Run")
 # Set Hyperparams for Batches
 parser.add_argument("--batch_size", type=int, default=100, help="The Batchsize used for Training")
@@ -68,10 +68,11 @@ parser.add_argument("--prune_frac", type=float, default=0.20, help="The Fraction
 parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printing-Frequency of Train- and Test Loss during Pruning")
 parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
 # Set Hyperparams defining the Reintroduction Procedure
-# TODO: Think about adding choice option (selecting reintroduction scheme)
-parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintialisation")  # 50
-parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reinitialisation")
-parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reinitialisation")
+parser.add_argument("--choice", type=str, default="old", choices=["old", "rng"], help="The Choice of Reintroductionscheme")
+parser.add_argument("--variation", type=str, default="dynamic", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
+parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintroduction")  # 50
+parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reintroduction")
+parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reintroduction")
 # TODO: Think about adding LR, the Factor used in scheduler, etc.
 parser.add_argument("-v", "--verbosity", action="count", default=1)
 args = parser.parse_args()
@@ -246,6 +247,9 @@ def original_initialization(mask_temp:  list, initial_state_dict:  dict) -> None
 
 # Function defining the pruning procedure used
 def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) -> None:
+    global model
+    global mask
+
     # Compression Rate
     comp = np.zeros(args.num_prune_cycles, float)
 
@@ -265,7 +269,7 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
         comp1      = utils.print_nonzeros(model)
         comp[_ite] = comp1
 
-        model_file = Path(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
+        model_file = Path(f"{os.getcwd()}/pruning/{args.seed}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
         if not model_file.exists():
             print(f"\n--- Pruning Level [{_ite}/{args.num_prune_cycles} of {experiment}.{seed}]: ---")
             # Training and Testing cycle
@@ -280,8 +284,8 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
                     # Save Weights if best (might be unneccessary)
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
-                        utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/prune/")
-                        T.save(model, f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/prune/{_ite}_model.pth.tar")
+                        utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/saves/best_models/")
+                        T.save(model, f"{os.getcwd()}/pruning/{args.seed}/saves/best_models/{_ite}_model.pth.tar")
                 # Save training- and validation Loss
                 all_val_loss[iter_]   = val_loss
                 all_train_loss[iter_] = train_loss
@@ -295,8 +299,8 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
             # Masking procedure
             # Saving Current State
             state_dict.append(copy.deepcopy(model.state_dict()))
-            utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/model_state_dicts/")
-            T.save(model, f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
+            utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/saves/model_state_dicts/")
+            T.save(model, f"{os.getcwd()}/pruning/{args.seed}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
             # Masking
             prune_by_percentile(_ite+1, args.prune_frac)
             # Rewind to pruned version of initial state -> optional
@@ -304,15 +308,15 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
                 original_initialization(mask, initial_state_dict)
             # Saving Mask
             mask_list.append(copy.deepcopy(mask))
-            utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/prune/")
-            with open(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/prune/mask_{comp1}.pkl", 'wb') as output_file:
+            utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/dumps/masks/")
+            with open(f"{os.getcwd()}/pruning/{args.seed}/dumps/masks/mask_{comp1}.pkl", 'wb') as output_file:
                 pickle.dump(mask, output_file)
 
             # Saving State of Optimizer and Scheduler
-            utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/optimizer/prune/")
-            T.save(optimizer.state_dict(), f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/optimizer/prune/opt_{_ite}.pt")
-            utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/scheduler/prune/")
-            T.save(scheduler.state_dict(), f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/scheduler/prune/sched_{_ite}.pt")
+            utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/saves/optimizer/")
+            T.save(optimizer.state_dict(), f"{os.getcwd()}/pruning/{args.seed}/saves/optimizer/opt_{_ite}.pt")
+            utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/saves/scheduler/")
+            T.save(scheduler.state_dict(), f"{os.getcwd()}/pruning/{args.seed}/saves/scheduler/sched_{_ite}.pt")
 
             # Saving relevant Data
             # Plotting training and validation Loss, Iteration Curve
@@ -326,16 +330,17 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
             plt.ylabel("Loss")
             plt.legend()
             plt.grid(color="gray")
-            utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/plots/prune/")
-            plt.savefig(f"{os.getcwd()}/{args.experiment}/{args.seed}/plots/prune/TrainingVsValidationLoss_{comp1}.png", dpi=1200)
+            utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/plots/")
+            plt.savefig(f"{os.getcwd()}/pruning/{args.seed}/plots/TrainingVsValidationLoss_{comp1}.png", dpi=1200)
             plt.close()
-            utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/prune/best_val_loss/")
-            T.save(best_val_loss,f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/prune/best_val_loss/prune_cycle{_ite}.pt")
+            utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/saves/best_val_loss/")
+            T.save(best_val_loss,f"{os.getcwd()}/pruning/{args.seed}/saves/best_val_loss/prune_cycle{_ite}.pt")
 
             # Dump Plot values
-            utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/prune/")
-            all_train_loss.dump(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/prune/all_train_loss_{comp1}.dat")
-            all_val_loss.dump(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/prune/all_val_loss_{comp1}.dat")
+            utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/dumps/train_loss/")
+            all_train_loss.dump(f"{os.getcwd()}/pruning/{args.seed}/dumps/train_loss/all_train_loss_{comp1}.dat")
+            utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/dumps/validation_loss/")
+            all_val_loss.dump(f"{os.getcwd()}/pruning/{args.seed}/dumps/validation_loss/all_val_loss_{comp1}.dat")
         else:
             print(f"Recycling Values from the Run that generated the File: {model_file}")
 
@@ -346,7 +351,7 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
             state_dict.append(copy.deepcopy(model.state_dict()))  # Add the State Dictionary to the List of State Dicts
 
             # Load the Mask
-            with open(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/prune/mask_{comp1}.pkl", 'rb') as input_file:
+            with open(f"{os.getcwd()}/pruning/{args.seed}/dumps/masks/mask_{comp1}.pkl", 'rb') as input_file:
                 mask = pickle.load(input_file)
             mask_list.append(copy.deepcopy(mask))
             # The following completes the Masking and loads the Mask to the desired Device
@@ -362,11 +367,11 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
                         j += 1
 
             # Load the Optimizer and Scheduler
-            optimizer.load_state_dict(T.load(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/optimizer/prune/opt_{_ite}.pt"))
-            scheduler.load_state_dict(T.load(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/scheduler/prune/sched_{_ite}.pt"))
+            optimizer.load_state_dict(T.load(f"{os.getcwd()}/pruning/{args.seed}/saves/optimizer/opt_{_ite}.pt"))
+            scheduler.load_state_dict(T.load(f"{os.getcwd()}/pruning/{args.seed}/saves/scheduler/sched_{_ite}.pt"))
 
             # Load the best Validation Loss of the Pruningcycle
-            best_val[_ite] = T.load(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/prune/best_val_loss/prune_cycle{_ite}.pt")
+            best_val[_ite] = T.load(f"{os.getcwd()}/pruning/{args.seed}/saves/best_val_loss/prune_cycle{_ite}.pt")
 
 
         # Resetting variables to 0
@@ -378,9 +383,9 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
         scheduler.best = float("inf")
 
     # Dumping Values for Plotting
-    utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/prune/")
-    comp.dump(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/prune/compression.dat")
-    best_val.dump(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/prune/best_val.dat")
+    utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/dumps/summary_plot_data/")
+    comp.dump(f"{os.getcwd()}/pruning/{args.seed}/dumps/summary_plot_data/compression.dat")
+    best_val.dump(f"{os.getcwd()}/pruning/{args.seed}/dumps/summary_plot_data/best_val.dat")
 
     # Plotting
     a = np.arange(args.num_prune_cycles)
@@ -391,8 +396,8 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
     plt.xticks(a, comp, rotation="vertical")
     plt.legend()
     plt.grid(color="gray")
-    utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/plots/prune/")
-    plt.savefig(f"{os.getcwd()}/{args.experiment}/{args.seed}/plots/prune/ValidationLossVsWeights.png", dpi=1200)
+    utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/plots/")
+    plt.savefig(f"{os.getcwd()}/pruning/{args.seed}/plots/ValidationLossVsWeights.png", dpi=1200)
     plt.close()
 
 
@@ -411,7 +416,7 @@ def symmetric_difference() -> list:
 
 
 # Function implementing reintroduction schemes
-def reintroduction(mask_dif:  list, choice: str = "old", model_state: dict = None) -> None:
+def reintroduction(mask_dif:  list, choice: str = args.choice, model_state: dict = None) -> None:
     """
     Input:
         mask_dif    -> 1 denotes the capacity of the network that shall be reintroduced
@@ -438,7 +443,7 @@ def reintroduction(mask_dif:  list, choice: str = "old", model_state: dict = Non
 
 
 # Function defining the training of the model during the reintroduction procedure
-def train_reintro(sym_dif_list: list, epoch: int, mask_num: int) -> float:
+def train_reintro(sym_dif_list: list, epoch: int, mask_num: int, variation: str = args.variation) -> float:
     total_loss   = 0.
     comp_loss    = 0.    # Used for comparison down below
     log_interval = 200
@@ -454,22 +459,37 @@ def train_reintro(sym_dif_list: list, epoch: int, mask_num: int) -> float:
         output = (model(data_pts, src_mask)).view(-1, args.ntokens)
         t_loss = criterion(output, targets.view(output.size(0)))
         t_loss.backward()
-        # Manipulating the learningrate according to reintroduction time
-        i = 0
-        for mask_difference in sym_dif_list:
-            factor = (1./0.95)**(i+1)  # The LR prior to the current LR, up for discussion; 0.95 = factor in Scheduler
-            i     += 1                 # Count pos in list; not using enumerate() as this way is more flexible. CHANGE?
-            j      = 0                 # Used to match position in mask with layer in the network
+        if variation == "dynamic":
+            # Manipulating the learningrate according to reintroduction time
+            i = 0
+            for mask_difference in sym_dif_list:
+                factor = (1./0.95)**(i+1)  # The LR prior to the current LR, up for discussion; 0.95 = factor in Scheduler
+                i     += 1                 # Count pos in list; not using enumerate() as this way is more flexible. CHANGE?
+                j      = 0                 # Used to match position in mask with layer in the network
+                for name, p in model.named_parameters():  # Vektorisieren nachscahuen; Pytorch discussion seite
+                    if 'weight' in name:
+                        # Change this Part to adjust the learningrate
+                        p.grad.data[mask_difference[j]] = p.grad.data[mask_difference[j]]*factor
+                        j += 1
+            j=0
             for name, p in model.named_parameters():  # Vektorisieren nachscahuen; Pytorch discussion seite
                 if 'weight' in name:
-                    # Change this Part to adjust the learningrate
-                    p.grad.data[mask_difference[j]] = p.grad.data[mask_difference[j]]*factor
+                    p.grad.data = p.grad.data * mask_list[-(mask_num+1)][j]
+                    j+=1
+        elif variation == "freezing":
+            j = 0
+            for name, p in model.named_parameters():  # Vektorisieren nachscahuen; Pytorch discussion seite
+                if 'weight' in name:
+                    p.grad.data = p.grad.data * sym_dif_list[-1][j]
                     j += 1
-        j=0
-        for name, p in model.named_parameters():  # Vektorisieren nachscahuen; Pytorch discussion seite
-            if 'weight' in name:
-                p.grad.data = p.grad.data * mask_list[-(mask_num+1)][j]
-                j+=1
+        elif variation == "identical":
+            j = 0
+            for name, p in model.named_parameters():  # Vektorisieren nachscahuen; Pytorch discussion seite
+                if 'weight' in name:
+                    p.grad.data = p.grad.data * mask_list[-(mask_num + 1)][j]
+                    j += 1
+        else:
+            print("This Variation does not exist yet - Teach me!")
         # Clipping Gradients
         T.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()  # As of now this updates every weight. That is bad!
@@ -486,12 +506,14 @@ def train_reintro(sym_dif_list: list, epoch: int, mask_num: int) -> float:
 
 
 # Function defining the procedure of regaining lost capacity
-def regaining_procedure(experiment: str = args.experiment, choice: str = "old") -> None:
+def regaining_procedure(experiment: str = args.experiment, choice: str = args.choice, variation: str = args.variation) -> None:
     """
     while possible
         reintroduction procedure
         subsequent training scheme
     """
+    global model
+
     # Information needed for Reintroduction
     s_d_mask_list = symmetric_difference()
     s_d_mask_list.reverse()
@@ -519,22 +541,22 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = "old") 
         comp1            = utils.print_nonzeros(model)
         comp[reint_step] = comp1
 
-        model_file = Path(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/model_reint_state_dicts/reint_state_dict_{reint_step}.pth.tar")
+        model_file = Path(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/model_reint_state_dicts/reint_state_dict_{reint_step}.pth.tar")
         if not model_file.exists():
-            print(f"\n--- Reintroduction Level [{experiment}.{seed}:{reint_step}/{len(s_d_mask_list)}]: ---")
+            print(f"\n--- Reintroduction Level [{reint_step}/{len(s_d_mask_list)} of {experiment}.{seed}]: ---")
             # Training and Testing cycle
             for __iter in pbar:
                 # Training
                 print()
-                train_loss = train_reintro(s_d_mask_list[:reint_step+1], __iter, reint_step)
+                train_loss = train_reintro(s_d_mask_list[:reint_step+1], __iter, reint_step, variation)
                 # Testing
                 if __iter % args.test_freq_reint == 0:
                     val_loss = evaluate()
                     # Save Weights if best (might be unneccessary)
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
-                        utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/reint/")
-                        T.save(model, f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/reint/{reint_step}_model.pth.tar")
+                        utils.checkdir(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/best_model_reint/")
+                        T.save(model, f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/best_model_reint/{reint_step}_model.pth.tar")
                 # Save training- and validation Loss
                 all_val_loss[__iter] = val_loss
                 all_train_loss[__iter] = train_loss
@@ -547,14 +569,14 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = "old") 
 
             # Saving Current State
             # reint_state_dict.append(copy.deepcopy(model.state_dict()))
-            utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/model_reint_state_dicts/")
-            T.save(model, f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/model_reint_state_dicts/reint_state_dict_{reint_step}.pth.tar")
+            utils.checkdir(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/model_reint_state_dicts/")
+            T.save(model, f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/model_reint_state_dicts/reint_state_dict_{reint_step}.pth.tar")
 
             # Saving State of Optimizer and Scheduler
-            utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/optimizer/reint/")
-            T.save(optimizer.state_dict(), f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/optimizer/reint/opt_{reint_step}.pt")
-            utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/scheduler/reint/")
-            T.save(scheduler.state_dict(), f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/scheduler/reint/sched_{reint_step}.pt")
+            utils.checkdir(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/optimizer_reint/")
+            T.save(optimizer.state_dict(), f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/optimizer_reint/opt_{reint_step}.pt")
+            utils.checkdir(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/scheduler_reint/")
+            T.save(scheduler.state_dict(), f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/scheduler_reint/sched_{reint_step}.pt")
 
             # Saving relevant Data
             # Plotting training and validation Loss, Iteration Curve
@@ -568,16 +590,17 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = "old") 
             plt.ylabel("Loss")
             plt.legend()
             plt.grid(color="gray")
-            utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/plots/reint/")
-            plt.savefig(f"{os.getcwd()}/{args.experiment}/{args.seed}/plots/reint/TrainingVsValidationLoss_{comp1}.png", dpi=1200)
+            utils.checkdir(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/plots/")
+            plt.savefig(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/plots/TrainingVsValidationLoss_{comp1}.png", dpi=1200)
             plt.close()
-            utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/reint/best_val_loss/")
-            T.save(best_val_loss, f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/reint/best_val_loss/reint_step{reint_step}.pt")
+            utils.checkdir(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/best_val_loss_reint/")
+            T.save(best_val_loss, f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/best_val_loss_reint/reint_step{reint_step}.pt")
 
             # Dump Plot values
-            utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/reint/")
-            all_train_loss.dump(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/reint/all_train_loss_{comp1}.dat")
-            all_val_loss.dump(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/reint/all_val_loss_{comp1}.dat")
+            utils.checkdir(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/dumps/train_loss_reint/")
+            all_train_loss.dump(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/dumps/train_loss_reint/all_train_loss_{comp1}.dat")
+            utils.checkdir(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/dumps/validation_loss_reint/")
+            all_val_loss.dump(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/dumps/validation_loss_reint/all_val_loss_{comp1}.dat")
         else:
             print(f"Recycling Values from the Run that generated the File: {model_file}")
 
@@ -588,11 +611,11 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = "old") 
             # reint_state_dict.append(copy.deepcopy(model.state_dict()))  # Add the State Dictionary to the List of Reintroduction State Dicts
 
             # Load the Optimizer and Scheduler
-            optimizer.load_state_dict(T.load(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/optimizer/reint/opt_{reint_step}.pt"))
-            scheduler.load_state_dict(T.load(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/scheduler/reint/sched_{reint_step}.pt"))
+            optimizer.load_state_dict(T.load(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/optimizer_reint/opt_{reint_step}.pt"))
+            scheduler.load_state_dict(T.load(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/scheduler_reint/sched_{reint_step}.pt"))
 
             # Load the best Validation Loss of the Pruningcycle
-            best_val[reint_step] = T.load(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/reint/best_val_loss/reint_step{reint_step}.pt")
+            best_val[reint_step] = T.load(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/best_val_loss_reint/reint_step{reint_step}.pt")
 
         # Resetting variables to 0
         best_val_loss  = np.inf
@@ -600,9 +623,9 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = "old") 
         all_val_loss   = np.zeros(args.num_epochs_reint, float)
 
     # Dumping Values for Plotting
-    utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/reint/")
-    comp.dump(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/reint/compression.dat")
-    best_val.dump(f"{os.getcwd()}/{args.experiment}/{args.seed}/dumps/reint/best_val.dat")
+    utils.checkdir(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/dumps/reint_summary_plot_data/")
+    comp.dump(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/dumps/reint_summary_plot_data/compression.dat")
+    best_val.dump(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/dumps/reint_summary_plot_data/best_val.dat")
 
     # Plotting
     a = np.arange(len(s_d_mask_list))
@@ -613,8 +636,8 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = "old") 
     plt.xticks(a, comp, rotation="vertical")
     plt.legend()
     plt.grid(color="gray")
-    utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/plots/reint/")
-    plt.savefig(f"{os.getcwd()}/{args.experiment}/{args.seed}/plots/reint/ValidationLossVsWeights.png", dpi=1200)
+    utils.checkdir(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/plots/")
+    plt.savefig(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/plots/ValidationLossVsWeights.png", dpi=1200)
     plt.close()
 
 
@@ -631,7 +654,7 @@ np.random.seed(seed)
 
 
 # Main
-def main(rewind: bool = True, experiment: str = args.experiment, choice: str = "old") -> None:
+def main(rewind: bool = True, experiment: str = args.experiment, choice: str = args.choice, variation: str = args.variation) -> None:
     print(f"Using device: {device}")
     starting_time = time.time()
     # Warm-Up Training? For rewinding as little as one epoch is enough
@@ -646,7 +669,7 @@ def main(rewind: bool = True, experiment: str = args.experiment, choice: str = "
     print(f"Runtime of the pruning procedure {time_pruning-time_warmup} [s]")
 
     # Reintroduction Procedure
-    regaining_procedure(experiment, choice)
+    regaining_procedure(experiment, choice, variation)
     time_reintroduction = time.time()
     print(f"Runtime of the reintroduction procedure {time_reintroduction-time_pruning} [s]")
 
