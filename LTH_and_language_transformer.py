@@ -83,13 +83,22 @@ train_iter, test_iter, val_iter = WikiText2.iters(batch_size=args.batch_size)  #
 # Finished preparing the Data
 
 # Building the Model to be trained
-model = transformer_modell.TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers, args.dropout).to(device)
-# Finished defining the Model
+init_file = Path(f"{os.getcwd()}/pruning/{args.seed}/saves/model_state_dicts/initial_state_dict.pth.tar")
+if not init_file.exists():
+    model = transformer_modell.TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers,
+                                                args.dropout).to(device)
 
-# Copying and Saving Initial State
-initial_state_dict = copy.deepcopy(model.state_dict())
-utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/model_state_dicts/")
-T.save(model, f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/model_state_dicts/initial_state_dict.pth.tar")
+    # Copying and Saving Initial State
+    initial_state_dict = copy.deepcopy(model.state_dict())
+    utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/saves/model_state_dicts/")
+    T.save(model, f"{os.getcwd()}/pruning/{args.seed}/saves/model_state_dicts/initial_state_dict.pth.tar")
+else:
+    model = T.load(init_file)
+    model.eval()
+    model.to(device)
+    initial_state_dict = copy.deepcopy(model.state_dict())
+# Finished defining/ loading the Model
+
 
 # List of Modelstates
 state_dict       = [initial_state_dict]
@@ -249,6 +258,8 @@ def original_initialization(mask_temp:  list, initial_state_dict:  dict) -> None
 def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) -> None:
     global model
     global mask
+    global optimizer
+    global scheduler
 
     # Compression Rate
     comp = np.zeros(args.num_prune_cycles, float)
@@ -346,7 +357,6 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
 
             # Load the Model to the desired Device
             model = T.load(model_file)
-            model.eval()
             model.to(device)
             state_dict.append(copy.deepcopy(model.state_dict()))  # Add the State Dictionary to the List of State Dicts
 
@@ -367,6 +377,8 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
                         j += 1
 
             # Load the Optimizer and Scheduler
+            optimizer = T.optim.SGD(model.parameters(), lr=1.0)  # LR here does not matter, as it will be replaced through load state dict
+            scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(10, args.test_freq_prune))
             optimizer.load_state_dict(T.load(f"{os.getcwd()}/pruning/{args.seed}/saves/optimizer/opt_{_ite}.pt"))
             scheduler.load_state_dict(T.load(f"{os.getcwd()}/pruning/{args.seed}/saves/scheduler/sched_{_ite}.pt"))
 
@@ -492,7 +504,7 @@ def train_reintro(sym_dif_list: list, epoch: int, mask_num: int, variation: str 
             print("This Variation does not exist yet - Teach me!")
         # Clipping Gradients
         T.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-        optimizer.step()  # As of now this updates every weight. That is bad!
+        optimizer.step()
         total_loss += t_loss.item()
         if batch_num % log_interval == 0 and batch_num > 0:
             ms_per_batch = (time.time() - start_time) * 1000 / log_interval
@@ -513,6 +525,8 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = args.ch
         subsequent training scheme
     """
     global model
+    global optimizer
+    global scheduler
 
     # Information needed for Reintroduction
     s_d_mask_list = symmetric_difference()
@@ -606,11 +620,13 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = args.ch
 
             # Load the Model to the desired Device
             model = T.load(model_file)
-            model.eval()
             model.to(device)
+            model.train()
             # reint_state_dict.append(copy.deepcopy(model.state_dict()))  # Add the State Dictionary to the List of Reintroduction State Dicts
 
             # Load the Optimizer and Scheduler
+            optimizer = T.optim.SGD(model.parameters(), lr= 1.0)  # LR here does not matter, as it will be replaced through load state dict
+            scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(10, args.test_freq_prune))
             optimizer.load_state_dict(T.load(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/optimizer_reint/opt_{reint_step}.pt"))
             scheduler.load_state_dict(T.load(f"{os.getcwd()}/reintroduction/{args.experiment}/{args.seed}/saves/scheduler_reint/sched_{reint_step}.pt"))
 
@@ -675,10 +691,10 @@ def main(rewind: bool = True, experiment: str = args.experiment, choice: str = a
 
     # Show and Save Timings
     print(f"Runtime overall {time_reintroduction - starting_time} [s]")
-    times = T.tensor([time_warmup-starting_time, time_pruning-time_warmup,
-                      time_reintroduction-time_pruning, time_reintroduction-starting_time])
-    utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/runtimes/")
-    T.save(times, f'{os.getcwd()}/{args.experiment}/{args.seed}/saves/runtimes/tensor.pt')
+    # times = T.tensor([time_warmup-starting_time, time_pruning-time_warmup,
+    #                   time_reintroduction-time_pruning, time_reintroduction-starting_time])
+    # utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/runtimes/")
+    # T.save(times, f'{os.getcwd()}/{args.experiment}/{args.seed}/saves/runtimes/tensor.pt')
 
 
 if __name__ == "__main__":
