@@ -47,8 +47,8 @@ device = T.device("cuda" if T.cuda.is_available() else "cpu")
 
 # Use a Parser to specify Hyperparams etc.
 parser = argparse.ArgumentParser()
-parser.add_argument("--experiment", type=str, default="old_identical", help="The Name of the Experiment setting")
-parser.add_argument("--seed", type=int, default=0, help="The Seed used for the Run")
+parser.add_argument("--experiment", type=str, default="rng_identical", help="The Name of the Experiment setting")
+parser.add_argument("--seed", type=int, default=1, help="The Seed used for the Run")
 # Set Hyperparams for Batches
 parser.add_argument("--batch_size", type=int, default=100, help="The Batchsize used for Training")
 parser.add_argument("--bptt", type=int, default=35, help="The Length of Backpropagation through Time")
@@ -68,7 +68,7 @@ parser.add_argument("--prune_frac", type=float, default=0.20, help="The Fraction
 parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printing-Frequency of Train- and Test Loss during Pruning")
 parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
 # Set Hyperparams defining the Reintroduction Procedure
-parser.add_argument("--choice", type=str, default="old", choices=["old", "rng"], help="The Choice of Reintroductionscheme")
+parser.add_argument("--choice", type=str, default="rng", choices=["old", "rng", "top"], help="The Choice of Reintroductionscheme")
 parser.add_argument("--variation", type=str, default="identical", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
 parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintroduction")  # 50
 parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reintroduction")
@@ -101,11 +101,12 @@ else:
 
 
 # List of Modelstates
-state_dict       = [initial_state_dict]
+state_dict  = [initial_state_dict]
+best_states = []
 # reint_state_dict = []
 
 # Specify the objective Function
-criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss()  # Gets returned as Loss
 lr        = 5.0  # learning rate
 # Stated in Successfully applying ... (Aachen) Adafactor gives better results than Adam, they include warmup after reset
 optimizer = T.optim.SGD(model.parameters(), lr=lr)
@@ -297,6 +298,7 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
                         best_val_loss = val_loss
                         utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/saves/best_models/")
                         T.save(model, f"{os.getcwd()}/pruning/{args.seed}/saves/best_models/{_ite}_model.pth.tar")
+                        best_state_dict = copy.deepcopy(model.state_dict())
                 # Save training- and validation Loss
                 all_val_loss[iter_]   = val_loss
                 all_train_loss[iter_] = train_loss
@@ -310,6 +312,7 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
             # Masking procedure
             # Saving Current State
             state_dict.append(copy.deepcopy(model.state_dict()))
+            best_states.append(best_state_dict)
             utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/saves/model_state_dicts/")
             T.save(model, f"{os.getcwd()}/pruning/{args.seed}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
             # Masking
@@ -382,6 +385,12 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
             optimizer.load_state_dict(T.load(f"{os.getcwd()}/pruning/{args.seed}/saves/optimizer/opt_{_ite}.pt"))
             scheduler.load_state_dict(T.load(f"{os.getcwd()}/pruning/{args.seed}/saves/scheduler/sched_{_ite}.pt"))
 
+            # Load the best Model to the desired Device
+            best_model_file = Path(f"{os.getcwd()}/pruning/{args.seed}/saves/best_models/{_ite}_model.pth.tar")
+            best_model = T.load(best_model_file)
+            best_model.to(device)
+            best_states.append(best_model.state_dict())  # Add the State Dictionary to the List of State Dicts
+
             # Load the best Validation Loss of the Pruningcycle
             best_val[_ite] = T.load(f"{os.getcwd()}/pruning/{args.seed}/saves/best_val_loss/prune_cycle{_ite}.pt")
 
@@ -428,21 +437,23 @@ def symmetric_difference() -> list:
 
 
 # Function implementing reintroduction schemes
-def reintroduction(mask_dif:  list, choice: str = args.choice, model_state: dict = None) -> None:
+def reintroduction(mask_dif:  list, choice: str = args.choice, model_state: int = -1) -> None:
     """
     Input:
         mask_dif    -> 1 denotes the capacity of the network that shall be reintroduced
         model_state -> previous state of the model which may be considered in the reintroduction scheme
-        choice      -> can be anything from {"old";"rng"}, denotes the reintroduction scheme
+        choice      -> can be anything from {"old";"rng";"top"}, denotes the reintroduction scheme
     Output:
         None
 
     Reintroduces previously pruned capacity in the network.
     """
     if choice == "old":
-        supplement = model_state
+        supplement = state_dict[model_state] #  Supplement is last reached State of corresponding sparsity
     elif choice == "rng":
-        supplement = transformer_modell.TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers, args.dropout)
+        supplement = transformer_modell.TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers, args.dropout).state_dict()
+    elif choice == "top":
+        supplement = best_states[model_state] #  Supplement is best reached State of corresponding sparsity
     else:
         supplement = None
         print(f"\nI do not know this choice of reintroduction scheme. Please be so kind and teach me.\n")
@@ -532,6 +543,7 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = args.ch
     s_d_mask_list = symmetric_difference()
     s_d_mask_list.reverse()
     state_dict.reverse()
+    best_states.reverse()
 
     # Compression Rate
     comp = np.zeros(len(s_d_mask_list), float)
@@ -544,7 +556,7 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = args.ch
 
     for reint_step in range(len(s_d_mask_list)):  # Similar to _ite in pruning_procedure(); Number needed
         # Reintroduce the lifted mask
-        reintroduction(s_d_mask_list[reint_step], choice, state_dict[reint_step])
+        reintroduction(s_d_mask_list[reint_step], choice, reint_step)
 
         # The following is similar to pruning_procedure()
         # Progressbar
