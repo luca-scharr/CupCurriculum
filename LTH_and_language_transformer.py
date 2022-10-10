@@ -47,7 +47,7 @@ device = T.device("cuda" if T.cuda.is_available() else "cpu")
 
 # Use a Parser to specify Hyperparams etc.
 parser = argparse.ArgumentParser()
-parser.add_argument("--experiment", type=str, default="rng_identical", help="The Name of the Experiment setting")
+parser.add_argument("--experiment", type=str, default="old_dynamic", help="The Name of the Experiment setting")
 parser.add_argument("--seed", type=int, default=1, help="The Seed used for the Run")
 # Set Hyperparams for Batches
 parser.add_argument("--batch_size", type=int, default=100, help="The Batchsize used for Training")
@@ -68,13 +68,14 @@ parser.add_argument("--prune_frac", type=float, default=0.20, help="The Fraction
 parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printing-Frequency of Train- and Test Loss during Pruning")
 parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
 # Set Hyperparams defining the Reintroduction Procedure
-parser.add_argument("--choice", type=str, default="rng", choices=["old", "rng", "top"], help="The Choice of Reintroductionscheme")
-parser.add_argument("--variation", type=str, default="identical", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
+parser.add_argument("--choice", type=str, default="old", choices=["old", "rng", "top"], help="The Choice of Reintroductionscheme")
+parser.add_argument("--variation", type=str, default="dynamic", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
 parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintroduction")  # 50
 parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reintroduction")
 parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reintroduction")
 # TODO: Think about adding LR, the Factor used in scheduler, etc.
 parser.add_argument("-v", "--verbosity", action="count", default=1)
+parser.add_argument("--baseline", type=bool, default=True, help="True runs Baseline, False runs Experiment")
 args = parser.parse_args()
 
 
@@ -116,40 +117,158 @@ scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor
 
 
 # Function defining the Warm-Up Procedure used
-def warmup(num_warmup: int = 5) -> None:
-    # Progressbar
-    bar = tqdm(range(num_warmup))
-    for epoch in bar:
-        total_loss   = 0.
-        comp_loss    = 0.  # Used for comparison down below
-        log_interval = 200
-        start_time   = time.time()
-        src_mask     = transformer_modell.generate_square_subsequent_mask(args.bptt).to(device)
-        model.train()  # turn on train mode
-        for batch_num, batch in enumerate(train_iter):
-            optimizer.zero_grad()
-            data_pts, targets = batch.text.to(device), batch.target.to(device)
-            batch_size_local = data_pts.size(0)
-            if batch_size_local != args.bptt:  # only on last batch
-                src_mask = src_mask[:batch_size_local, :batch_size_local]
-            output = (model(data_pts, src_mask)).view(-1, args.ntokens)
-            t_loss = criterion(output, targets.view(output.size(0)))
-            t_loss.backward()
-            # Clipping Gradients
-            T.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-            optimizer.step()
-            total_loss += t_loss.item()
-            if batch_num % log_interval == 0 and batch_num > 0:
-                ms_per_batch = (time.time() - start_time) * 1000 / log_interval
-                cur_loss = (total_loss - comp_loss) / log_interval
-                comp_loss = total_loss
-                print(f'| epoch {epoch:3d} | {batch_num:5d}/{len(train_iter):5d} batches | '
-                      f'lr {optimizer.param_groups[0]["lr"]:02.2f} | ms/batch {ms_per_batch:5.2f} | '
-                      f'loss {cur_loss:5.2f}')
-                start_time = time.time()
-    # Copying and Saving State after Warm-Up
-    utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/model_state_dicts/")
-    T.save(model, f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/model_state_dicts/warmup_state_dict.pth.tar")
+def train_base(epoch: int) -> float:
+    total_loss   = 0.
+    comp_loss    = 0.  # Used for comparison down below
+    log_interval = 200
+    start_time   = time.time()
+    src_mask     = transformer_modell.generate_square_subsequent_mask(args.bptt).to(device)
+    model.train()  # turn on train mode
+    for batch_num, batch in enumerate(train_iter):
+        optimizer.zero_grad()
+        data_pts, targets = batch.text.to(device), batch.target.to(device)
+        batch_size_local = data_pts.size(0)
+        if batch_size_local != args.bptt:  # only on last batch
+            src_mask = src_mask[:batch_size_local, :batch_size_local]
+        output = (model(data_pts, src_mask)).view(-1, args.ntokens)
+        t_loss = criterion(output, targets.view(output.size(0)))
+        t_loss.backward()
+        # Clipping Gradients
+        T.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        optimizer.step()
+        total_loss += t_loss.item()
+        if batch_num % log_interval == 0 and batch_num > 0:
+            ms_per_batch = (time.time() - start_time) * 1000 / log_interval
+            cur_loss = (total_loss - comp_loss) / log_interval
+            comp_loss = total_loss
+            print(f'| epoch {epoch:3d} | {batch_num:5d}/{len(train_iter):5d} batches | '
+                  f'lr {optimizer.param_groups[0]["lr"]:02.2f} | ms/batch {ms_per_batch:5.2f} | '
+                  f'loss {cur_loss:5.2f}')
+            start_time = time.time()
+    return total_loss / len(train_iter)
+
+
+# Funktion executing the baseline Experiment
+def baseline(num_iterations: int = 2000, num_checkpoints: int = 40):
+    global model
+    global optimizer
+    global scheduler
+
+    iter_per_checkpoint = int(num_iterations / num_checkpoints)
+    iter_not_executed   = num_iterations % num_checkpoints
+
+    # Initialising storage for performance indicators
+    best_val_loss  = np.inf
+    best_val       = np.full(num_checkpoints, np.inf)
+    all_train_loss = np.zeros(iter_per_checkpoint, float)
+    all_val_loss   = np.zeros(iter_per_checkpoint, float)
+
+    print(f"There are {iter_not_executed} Iterations that will not be executed, as they do not fit in the Checkpoints")
+
+    # Checkpoint
+    for _ite in range(num_checkpoints):
+        # Progressbar
+        pbar = tqdm(range(iter_per_checkpoint))
+        print()
+        model_file = Path(f"{os.getcwd()}/baseline/{args.seed}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
+        if not model_file.exists():
+            print(f"\n--- Checkpoint number [{_ite}/{num_checkpoints} of baseline.{seed}]: ---")
+            # Training and Testing cycle
+            for iter_ in pbar:
+                # Training
+                print()
+                train_loss = train_base(iter_)
+                # Testing
+                if iter_ % args.test_freq_prune == 0:
+                    val_loss = evaluate()
+                    # Save Weights if best
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                        utils.checkdir(f"{os.getcwd()}/baseline/{args.seed}/saves/best_models/")
+                        T.save(model, f"{os.getcwd()}/baseline/{args.seed}/saves/best_models/{_ite}_model.pth.tar")
+                        best_state_dict = copy.deepcopy(model.state_dict())
+                # Save training- and validation Loss
+                all_val_loss[iter_]   = val_loss
+                all_train_loss[iter_] = train_loss
+                # Print training- and validation Loss
+                if iter_ % args.print_freq_prune == 0:
+                    pbar.set_description(f'Loss: {train_loss:.3f} Validation: {val_loss:.3f}')
+                scheduler.step(val_loss)
+
+            best_val[_ite] = best_val_loss
+
+            # Saving Current State
+            utils.checkdir(f"{os.getcwd()}/baseline/{args.seed}/saves/model_state_dicts/")
+            T.save(model, f"{os.getcwd()}/baseline/{args.seed}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
+
+            # Saving State of Optimizer and Scheduler
+            utils.checkdir(f"{os.getcwd()}/baseline/{args.seed}/saves/optimizer/")
+            T.save(optimizer.state_dict(), f"{os.getcwd()}/baseline/{args.seed}/saves/optimizer/opt_{_ite}.pt")
+            utils.checkdir(f"{os.getcwd()}/baseline/{args.seed}/saves/scheduler/")
+            T.save(scheduler.state_dict(), f"{os.getcwd()}/baseline/{args.seed}/saves/scheduler/sched_{_ite}.pt")
+
+            # Saving relevant Data
+            # Plotting training and validation Loss, Iteration Curve
+            # NOTE training Loss is computed for every iteration
+            # while validation Loss is computed only for every {test_freq_prune} iterations
+            # Therefore validation Loss saved is constant during the iterations inbetween.
+            plt.plot(np.arange(1, iter_per_checkpoint + 1), all_train_loss, c="blue", label="Training Loss")
+            plt.plot(np.arange(1, iter_per_checkpoint + 1), all_val_loss, c="red", label="Validation Loss")
+            plt.title(f"Training and Validation Loss Vs Iterations (WikiText2, Language Model)")
+            plt.xlabel("Iterations")
+            plt.ylabel("Loss")
+            plt.legend()
+            plt.grid(color="gray")
+            utils.checkdir(f"{os.getcwd()}/baseline/{args.seed}/plots/")
+            plt.savefig(f"{os.getcwd()}/baseline/{args.seed}/plots/TrainingVsValidationLoss_{_ite}.png", dpi=1200)
+            plt.close()
+            utils.checkdir(f"{os.getcwd()}/baseline/{args.seed}/saves/best_val_loss/")
+            T.save(best_val_loss, f"{os.getcwd()}/baseline/{args.seed}/saves/best_val_loss/checkpoint{_ite}.pt")
+
+            # Dump Plot values
+            utils.checkdir(f"{os.getcwd()}/baseline/{args.seed}/dumps/train_loss/")
+            all_train_loss.dump(f"{os.getcwd()}/baseline/{args.seed}/dumps/train_loss/all_train_loss_{_ite}.dat")
+            utils.checkdir(f"{os.getcwd()}/baseline/{args.seed}/dumps/validation_loss/")
+            all_val_loss.dump(f"{os.getcwd()}/baseline/{args.seed}/dumps/validation_loss/all_val_loss_{_ite}.dat")
+        else:
+            print(f"Recycling Values from the Run that generated the File: {model_file}")
+
+            # Load the Model to the desired Device
+            model = T.load(model_file)
+            model.to(device)
+
+            # Load the Optimizer and Scheduler
+            optimizer = T.optim.SGD(model.parameters(), lr=1.0)  # LR here does not matter, as it will be replaced through load state dict
+            scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(10, args.test_freq_prune))
+            optimizer.load_state_dict(T.load(f"{os.getcwd()}/baseline/{args.seed}/saves/optimizer/opt_{_ite}.pt"))
+            scheduler.load_state_dict(T.load(f"{os.getcwd()}/baseline/{args.seed}/saves/scheduler/sched_{_ite}.pt"))
+
+            # Load the best Validation Loss of the Pruningcycle
+            best_val[_ite] = T.load(f"{os.getcwd()}/baseline/{args.seed}/saves/best_val_loss/checkpoint{_ite}.pt")
+
+        # Resetting variables to 0
+        best_val_loss  = np.inf
+        all_train_loss = np.zeros(iter_per_checkpoint, float)
+        all_val_loss   = np.zeros(iter_per_checkpoint, float)
+
+        # Resetting Schedulers best such that the LR won't get regulated based on previous pruning cycles
+        scheduler.best = float("inf")
+
+    # Dumping Values for Plotting
+    utils.checkdir(f"{os.getcwd()}/baseline/{args.seed}/dumps/summary_plot_data/")
+    best_val.dump(f"{os.getcwd()}/baseline/{args.seed}/dumps/summary_plot_data/best_val.dat")
+
+    # Plotting
+    a = np.arange(num_checkpoints)
+    plt.plot(a, best_val, c="blue", label="Best Performance Reached")
+    plt.title(f"Validation Loss Vs Checkpoints (WikiText2, Language Model)")
+    plt.xlabel("Checkpoint Number")
+    plt.ylabel("Validation Loss")
+    plt.legend()
+    plt.grid(color="gray")
+    utils.checkdir(f"{os.getcwd()}/baseline/{args.seed}/plots/")
+    plt.savefig(f"{os.getcwd()}/baseline/{args.seed}/plots/ValidationLossVsCheckpoints.png", dpi=1200)
+    plt.close()
     pass
 
 
@@ -293,7 +412,7 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
                 # Testing
                 if iter_ % args.test_freq_prune == 0:
                     val_loss = evaluate()
-                    # Save Weights if best (might be unneccessary)
+                    # Save Weights if best
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
                         utils.checkdir(f"{os.getcwd()}/pruning/{args.seed}/saves/best_models/")
@@ -683,30 +802,23 @@ np.random.seed(seed)
 
 # Main
 def main(rewind: bool = True, experiment: str = args.experiment, choice: str = args.choice, variation: str = args.variation) -> None:
-    print(f"Using device: {device}")
-    starting_time = time.time()
-    # Warm-Up Training? For rewinding as little as one epoch is enough
-    # warmup()
-    # warmup_state_dict = copy.deepcopy(model.state_dict())
-    time_warmup = time.time()
-    print(f"Runtime of the warmup {time_warmup-starting_time} [s]")
+    if args.baseline:
+        baseline()
+    else:
+        print(f"Using device: {device}")
+        starting_time = time.time()
+        # Pruning Procedure
+        pruning_procedure(rewind, experiment)  # The Literature finds rewinding improving the performance when rewinded to warmup state
+        time_pruning = time.time()
+        print(f"Runtime of the pruning procedure {time_pruning-starting_time} [s]")
 
-    # Pruning Procedure
-    pruning_procedure(rewind, experiment)  # The Literature finds rewinding improving the performance when rewinded to warmup state
-    time_pruning = time.time()
-    print(f"Runtime of the pruning procedure {time_pruning-time_warmup} [s]")
+        # Reintroduction Procedure
+        regaining_procedure(experiment, choice, variation)
+        time_reintroduction = time.time()
+        print(f"Runtime of the reintroduction procedure {time_reintroduction-time_pruning} [s]")
 
-    # Reintroduction Procedure
-    regaining_procedure(experiment, choice, variation)
-    time_reintroduction = time.time()
-    print(f"Runtime of the reintroduction procedure {time_reintroduction-time_pruning} [s]")
-
-    # Show and Save Timings
-    print(f"Runtime overall {time_reintroduction - starting_time} [s]")
-    # times = T.tensor([time_warmup-starting_time, time_pruning-time_warmup,
-    #                   time_reintroduction-time_pruning, time_reintroduction-starting_time])
-    # utils.checkdir(f"{os.getcwd()}/{args.experiment}/{args.seed}/saves/runtimes/")
-    # T.save(times, f'{os.getcwd()}/{args.experiment}/{args.seed}/saves/runtimes/tensor.pt')
+        # Show Timings
+        print(f"Runtime overall {time_reintroduction - starting_time} [s]")
 
 
 if __name__ == "__main__":
