@@ -21,6 +21,9 @@ import seaborn as sns
 import torch as T
 from torch import nn, Tensor
 import torch.optim as opt
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 # Neural Network parts from Pytorch
 from torch.nn import TransformerEncoder, TransformerEncoderLayer, init
@@ -43,11 +46,11 @@ import transformer_modell
 sns.set_style('darkgrid')
 
 # Setting the computing device
-device = T.device("cuda" if T.cuda.is_available() else "cpu")
+device = T.device("cuda:2" if T.cuda.is_available() else "cpu")
 
 # Use a Parser to specify Hyperparams etc.
 parser = argparse.ArgumentParser()
-parser.add_argument("--experiment", type=str, default="old_dynamic", help="The Name of the Experiment setting")
+parser.add_argument("--experiment", type=str, default="old_identical", help="The Name of the Experiment setting")
 parser.add_argument("--seed", type=int, default=1, help="The Seed used for the Run")
 # Set Hyperparams for Batches
 parser.add_argument("--batch_size", type=int, default=100, help="The Batchsize used for Training")
@@ -69,15 +72,26 @@ parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printin
 parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
 # Set Hyperparams defining the Reintroduction Procedure
 parser.add_argument("--choice", type=str, default="old", choices=["old", "rng", "top"], help="The Choice of Reintroductionscheme")
-parser.add_argument("--variation", type=str, default="dynamic", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
+parser.add_argument("--variation", type=str, default="identical", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
 parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintroduction")  # 50
 parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reintroduction")
 parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reintroduction")
 # TODO: Think about adding LR, the Factor used in scheduler, etc.
 parser.add_argument("-v", "--verbosity", action="count", default=1)
-parser.add_argument("--baseline", type=bool, default=True, help="True runs Baseline, False runs Experiment")
+parser.add_argument("--baseline", type=bool, default=False, help="True runs Baseline, False runs Experiment")
 args = parser.parse_args()
 
+"""
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+
+    # initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+"""
 
 # Generate Batches inside the Datasets. NOT SHUFFLED
 train_iter, test_iter, val_iter = WikiText2.iters(batch_size=args.batch_size)  # shape [seq_len, batch_size]
@@ -86,8 +100,8 @@ train_iter, test_iter, val_iter = WikiText2.iters(batch_size=args.batch_size)  #
 # Building the Model to be trained
 init_file = Path(f"{os.getcwd()}/pruning/{args.seed}/saves/model_state_dicts/initial_state_dict.pth.tar")
 if not init_file.exists():
-    model = transformer_modell.TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers,
-                                                args.dropout).to(device)
+    model = transformer_modell.TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers, args.dropout)
+    model.to(device)
 
     # Copying and Saving Initial State
     initial_state_dict = copy.deepcopy(model.state_dict())
@@ -110,10 +124,85 @@ best_states = []
 criterion = nn.CrossEntropyLoss()  # Gets returned as Loss
 lr        = 5.0  # learning rate
 # Stated in Successfully applying ... (Aachen) Adafactor gives better results than Adam, they include warmup after reset
-optimizer = T.optim.SGD(model.parameters(), lr=lr)
-scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(10, args.test_freq_prune))
+optimizer = opt.SGD(model.parameters(), lr=lr)
+scheduler = opt.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(10, args.test_freq_prune))
 # lr = 5.0 and factor = 0.95 gives a maximum of 333 updates to lr before the update gets smaler than 1e-8
 # Finished specifying the objective Function
+
+
+
+"""
+def demo_basic(rank, world_size):
+    print(f"Running basic DDP example on rank {rank}.")
+    setup(rank, world_size)
+
+    # create model and move it to GPU with id rank
+    model = transformer_modell.TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers, args.dropout)
+    model.to(rank)
+    ddp_model = DDP(model, device_ids=[rank])
+
+    loss_fn   = criterion
+
+    optimizer.zero_grad()
+    outputs = ddp_model(T.randn(20, 10))
+    labels  = T.randn(20, 5).to(rank)
+    loss_fn(outputs, labels).backward()
+    optimizer.step()
+
+    cleanup()
+
+
+def run_demo(demo_fn, world_size):
+    mp.spawn(demo_fn, args=(world_size,), nprocs=world_size, join=True)
+
+
+def demo_checkpoint(rank, world_size):
+    print(f"Running DDP checkpoint example on rank {rank}.")
+    setup(rank, world_size)
+
+    model = transformer_modell.TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers, args.dropout)
+    model.to(rank)
+    ddp_model = DDP(model, device_ids=[rank])
+
+    CHECKPOINT_PATH = tempfile.gettempdir() + "/model.checkpoint"
+    if rank == 0:
+        # All processes should see same parameters as they all start from same
+        # random parameters and gradients are synchronized in backward passes.
+        # Therefore, saving it in one process is sufficient.
+        T.save(ddp_model.state_dict(), CHECKPOINT_PATH)
+
+    # Use a barrier() to make sure that process 1 loads the model after process
+    # 0 saves it.
+    dist.barrier()
+    # configure map_location properly
+    map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
+    ddp_model.load_state_dict(T.load(CHECKPOINT_PATH, map_location=map_location))
+
+    loss_fn = nn.MSELoss()
+    optimizer = opt.SGD(ddp_model.parameters(), lr=0.001)
+
+    optimizer.zero_grad()
+    outputs = ddp_model(T.randn(20, 10))
+    labels = T.randn(20, 5).to(rank)
+
+    loss_fn(outputs, labels).backward()
+    optimizer.step()
+
+    # Not necessary to use a dist.barrier() to guard the file deletion below
+    # as the AllReduce ops in the backward pass of DDP already served as
+    # a synchronization.
+
+    if rank == 0:
+        os.remove(CHECKPOINT_PATH)
+
+    cleanup()
+
+"""
+
+
+
+
+
 
 
 # Function defining the Warm-Up Procedure used
@@ -145,7 +234,7 @@ def train_base(epoch: int) -> float:
                   f'lr {optimizer.param_groups[0]["lr"]:02.2f} | ms/batch {ms_per_batch:5.2f} | '
                   f'loss {cur_loss:5.2f}')
             start_time = time.time()
-    return total_loss / len(train_iter)
+    return total_loss / (args.batch_size * len(train_iter))
 
 
 # Funktion executing the baseline Experiment
@@ -307,7 +396,7 @@ def train_prune(epoch: int) -> float:
                   f'lr {optimizer.param_groups[0]["lr"]:02.2f} | ms/batch {ms_per_batch:5.2f} | '
                   f'loss {cur_loss:5.2f}')
             start_time = time.time()
-    return total_loss / len(train_iter)  # Loss per Datapoint, a little smaler
+    return total_loss / (args.batch_size * len(train_iter))  # Loss per Datapoint, a little smaler
 
 
 # Function defining the evaluation of the Model
@@ -322,7 +411,7 @@ def evaluate() -> float:
             if batch_size_local != args.bptt:
                 src_mask = src_mask[:batch_size_local, :batch_size_local]
             output = (model(data_pts, src_mask)).view(-1, args.ntokens)
-            total_loss += batch_size_local * criterion(output, targets.view(output.size(0))).item()
+            total_loss += criterion(output, targets.view(output.size(0))).item()
     return total_loss / (args.batch_size * len(val_iter))  # Approximatley the Loss per Datapoint, a little smaler
 
 
@@ -341,7 +430,7 @@ def prune_by_percentile(pruning_cycle: int, percent: float) -> None:
             b,i = T.sort(dif.view(w_c.numel()))          # i gives the Information needed for pruning, b is irrelevant
             m_w.view(w_c.numel())[i[:round(w_c.numel() * (1-(1-percent)**pruning_cycle))]] = 0  # int better?
             # Apply new weight and mask
-            param.data = (w_c * m_w).to(param.device)
+            param.data = (w_c * m_w).to(device)
             mask[j] = m_w.to(device)
             j += 1
 
@@ -356,7 +445,7 @@ def make_mask() -> list:
     i = 0
     for name, param in model.named_parameters():
         if 'weight' in name:
-            mask[i] = T.ones_like(param.data)  # Complete Mask containing ones
+            mask[i] = T.ones_like(param.data).to(device)  # Complete Mask containing ones
             i = i + 1
     return mask
 
@@ -366,10 +455,10 @@ def original_initialization(mask_temp:  list, initial_state_dict:  dict) -> None
     i = 0
     for name, param in model.named_parameters():
         if "weight" in name:
-            param.data = (mask_temp[i].to(param.device) * initial_state_dict[name].to(param.device))
+            param.data = (mask_temp[i].to(device) * initial_state_dict[name].to(device))
             i = i + 1
         else:
-            param.data = initial_state_dict[name].to(param.device)
+            param.data = initial_state_dict[name].to(device)
     if args.verbosity >= 2:
         print("rewinding complete")
 
@@ -478,18 +567,18 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
             print(f"Recycling Values from the Run that generated the File: {model_file}")
 
             # Load the Model to the desired Device
-            model = T.load(model_file)
-            model.to(device)
+            model = T.load(model_file, map_location=T.device(device))
             state_dict.append(copy.deepcopy(model.state_dict()))  # Add the State Dictionary to the List of State Dicts
 
             # Load the Mask
             with open(f"{os.getcwd()}/pruning/{args.seed}/dumps/masks/mask_{comp1}.pkl", 'rb') as input_file:
-                mask = pickle.load(input_file)
-            mask_list.append(copy.deepcopy(mask))
+                mask_temp = pickle.load(input_file)
+            for j in range(len(mask_temp)):
+                mask[j] = mask_temp[j].to(device)
             # The following completes the Masking and loads the Mask to the desired Device
             if rewind and _ite != args.num_prune_cycles - 1:
                 original_initialization(mask, initial_state_dict)
-            elif (not rewind) and _ite != args.num_prune_cycles - 1:
+            if (not rewind) and _ite != args.num_prune_cycles - 1:
                 j = 0
                 for name, param in model.named_parameters():
                     if 'weight' in name:
@@ -497,6 +586,7 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
                         m_w = mask[j].to(device)     # Mask for this Weight
                         param.data = (w_c * m_w).to(device)
                         j += 1
+            mask_list.append(copy.deepcopy(mask))
 
             # Load the Optimizer and Scheduler
             optimizer = T.optim.SGD(model.parameters(), lr=1.0)  # LR here does not matter, as it will be replaced through load state dict
@@ -644,7 +734,7 @@ def train_reintro(sym_dif_list: list, epoch: int, mask_num: int, variation: str 
                   f'lr {optimizer.param_groups[0]["lr"]:02.2f} | ms/batch {ms_per_batch:5.2f} | '
                   f'loss {cur_loss:5.2f}')
             start_time = time.time()
-    return total_loss / len(train_iter)  # Loss per Datapoint, a little smaler
+    return total_loss / (args.batch_size * len(train_iter))  # Loss per Datapoint, a little smaler
 
 
 # Function defining the procedure of regaining lost capacity
