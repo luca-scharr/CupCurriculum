@@ -50,7 +50,7 @@ device = T.device("cuda:3" if T.cuda.is_available() else "cpu")
 
 # Use a Parser to specify Hyperparams etc.
 parser = argparse.ArgumentParser()
-parser.add_argument("--experiment", type=str, default="top_dynamic", help="The Name of the Experiment setting")
+parser.add_argument("--experiment", type=str, default="rng_freezing", help="The Name of the Experiment setting")
 parser.add_argument("--seed", type=int, default=4, help="The Seed used for the Run")
 # Set Hyperparams for Batches
 parser.add_argument("--batch_size", type=int, default=100, help="The Batchsize used for Training")
@@ -71,14 +71,14 @@ parser.add_argument("--prune_frac", type=float, default=0.20, help="The Fraction
 parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printing-Frequency of Train- and Test Loss during Pruning")
 parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
 # Set Hyperparams defining the Reintroduction Procedure
-parser.add_argument("--choice", type=str, default="top", choices=["old", "rng", "top"], help="The Choice of Reintroductionscheme")
-parser.add_argument("--variation", type=str, default="dynamic", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
+parser.add_argument("--choice", type=str, default="rng", choices=["old", "rng", "top"], help="The Choice of Reintroductionscheme")
+parser.add_argument("--variation", type=str, default="freezing", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
 parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintroduction")  # 50
 parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reintroduction")
 parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reintroduction")
 # TODO: Think about adding LR, the Factor used in scheduler, etc.
 parser.add_argument("-v", "--verbosity", action="count", default=1)
-parser.add_argument("--baseline", type=bool, default=True, help="True runs Baseline, False runs Experiment")
+parser.add_argument("--baseline", type=bool, default=False, help="True runs Baseline, False runs Experiment")
 args = parser.parse_args()
 
 """
@@ -631,8 +631,8 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
     plt.close()
 
 
-# Function implementing symmetric difference for the masks
-def symmetric_difference() -> list:
+# Function implementing the set difference for the masks
+def set_difference() -> list:
     sym_dif_list = []
     for a,b in zip(mask_list[:-1],mask_list[1:]):
         sym_dif = copy.deepcopy(a)
@@ -747,7 +747,7 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = args.ch
     global scheduler
 
     # Information needed for Reintroduction
-    s_d_mask_list = symmetric_difference()
+    s_d_mask_list = set_difference()
     s_d_mask_list.reverse()
     state_dict.reverse()
     best_states.reverse()
