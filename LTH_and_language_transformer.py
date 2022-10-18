@@ -46,12 +46,12 @@ import transformer_modell
 sns.set_style('darkgrid')
 
 # Setting the computing device
-device = T.device("cuda:2" if T.cuda.is_available() else "cpu")
+device = T.device("cuda:3" if T.cuda.is_available() else "cpu")
 
 # Use a Parser to specify Hyperparams etc.
 parser = argparse.ArgumentParser()
-parser.add_argument("--experiment", type=str, default="old_identical", help="The Name of the Experiment setting")
-parser.add_argument("--seed", type=int, default=1, help="The Seed used for the Run")
+parser.add_argument("--experiment", type=str, default="top_dynamic", help="The Name of the Experiment setting")
+parser.add_argument("--seed", type=int, default=4, help="The Seed used for the Run")
 # Set Hyperparams for Batches
 parser.add_argument("--batch_size", type=int, default=100, help="The Batchsize used for Training")
 parser.add_argument("--bptt", type=int, default=35, help="The Length of Backpropagation through Time")
@@ -71,14 +71,14 @@ parser.add_argument("--prune_frac", type=float, default=0.20, help="The Fraction
 parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printing-Frequency of Train- and Test Loss during Pruning")
 parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
 # Set Hyperparams defining the Reintroduction Procedure
-parser.add_argument("--choice", type=str, default="old", choices=["old", "rng", "top"], help="The Choice of Reintroductionscheme")
-parser.add_argument("--variation", type=str, default="identical", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
+parser.add_argument("--choice", type=str, default="top", choices=["old", "rng", "top"], help="The Choice of Reintroductionscheme")
+parser.add_argument("--variation", type=str, default="dynamic", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
 parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintroduction")  # 50
 parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reintroduction")
 parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reintroduction")
 # TODO: Think about adding LR, the Factor used in scheduler, etc.
 parser.add_argument("-v", "--verbosity", action="count", default=1)
-parser.add_argument("--baseline", type=bool, default=False, help="True runs Baseline, False runs Experiment")
+parser.add_argument("--baseline", type=bool, default=True, help="True runs Baseline, False runs Experiment")
 args = parser.parse_args()
 
 """
@@ -228,7 +228,7 @@ def train_base(epoch: int) -> float:
         total_loss += t_loss.item()
         if batch_num % log_interval == 0 and batch_num > 0:
             ms_per_batch = (time.time() - start_time) * 1000 / log_interval
-            cur_loss = (total_loss - comp_loss) / log_interval
+            cur_loss = (total_loss - comp_loss) / (log_interval*args.batch_size)
             comp_loss = total_loss
             print(f'| epoch {epoch:3d} | {batch_num:5d}/{len(train_iter):5d} batches | '
                   f'lr {optimizer.param_groups[0]["lr"]:02.2f} | ms/batch {ms_per_batch:5.2f} | '
@@ -390,7 +390,7 @@ def train_prune(epoch: int) -> float:
         total_loss += t_loss.item()
         if batch_num % log_interval == 0 and batch_num > 0:
             ms_per_batch = (time.time() - start_time) * 1000 / log_interval
-            cur_loss = (total_loss - comp_loss) / log_interval
+            cur_loss = (total_loss - comp_loss) / (log_interval*args.batch_size)
             comp_loss = total_loss
             print(f'| epoch {epoch:3d} | {batch_num:5d}/{len(train_iter):5d} batches | '
                   f'lr {optimizer.param_groups[0]["lr"]:02.2f} | ms/batch {ms_per_batch:5.2f} | '
@@ -634,9 +634,7 @@ def pruning_procedure(rewind: bool = True, experiment: str = args.experiment) ->
 # Function implementing symmetric difference for the masks
 def symmetric_difference() -> list:
     sym_dif_list = []
-    for i in range(len(mask_list) - 1):
-        a = mask_list[i]
-        b = mask_list[i + 1]
+    for a,b in zip(mask_list[:-1],mask_list[1:]):
         sym_dif = copy.deepcopy(a)
         for j in range(len(a)):
             sym_dif[j] = sym_dif[j].to(bool)
@@ -728,7 +726,7 @@ def train_reintro(sym_dif_list: list, epoch: int, mask_num: int, variation: str 
         total_loss += t_loss.item()
         if batch_num % log_interval == 0 and batch_num > 0:
             ms_per_batch = (time.time() - start_time) * 1000 / log_interval
-            cur_loss = (total_loss - comp_loss) / log_interval
+            cur_loss = (total_loss - comp_loss) / (log_interval*args.batch_size)
             comp_loss = total_loss
             print(f'| epoch {epoch:3d} | {batch_num:5d}/{len(train_iter):5d} batches | '
                   f'lr {optimizer.param_groups[0]["lr"]:02.2f} | ms/batch {ms_per_batch:5.2f} | '
@@ -896,15 +894,15 @@ def main(rewind: bool = True, experiment: str = args.experiment, choice: str = a
         baseline()
     else:
         print(f"Using device: {device}")
-        starting_time = time.time()
+        starting_time = time.perf_counter()
         # Pruning Procedure
         pruning_procedure(rewind, experiment)  # The Literature finds rewinding improving the performance when rewinded to warmup state
-        time_pruning = time.time()
+        time_pruning = time.perf_counter()
         print(f"Runtime of the pruning procedure {time_pruning-starting_time} [s]")
 
         # Reintroduction Procedure
         regaining_procedure(experiment, choice, variation)
-        time_reintroduction = time.time()
+        time_reintroduction = time.perf_counter()
         print(f"Runtime of the reintroduction procedure {time_reintroduction-time_pruning} [s]")
 
         # Show Timings
