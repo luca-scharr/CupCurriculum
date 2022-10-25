@@ -53,7 +53,7 @@ def scatter(ax, plot_type, value_b, value_l, marker, marker_style1, marker_style
                        label="Best Validation Loss at full Capacity" if not legend_exists[0] else "_",
                        **marker_style1)
             legend_exists[0]=True
-        else:# TODO: legend_exists muss übergeben werden
+        else:
             ax.scatter(name, value_b, marker=marker,
                        label="Best Validation Loss with less Capacity" if not legend_exists[1] else "_",
                        **marker_style2)
