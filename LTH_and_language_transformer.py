@@ -46,26 +46,27 @@ import transformer_modell
 sns.set_style('darkgrid')
 
 # Setting the computing device
-device = T.device("cuda:3" if T.cuda.is_available() else "cpu")
+device =                         T.device("cuda:3" if T.cuda.is_available() else "cpu")
 
 # Use a Parser to specify Hyperparams etc.
 parser = argparse.ArgumentParser()
-parser.add_argument("--experiment", type=str, default="old_dynamic", help="The Name of the Experiment setting")
-parser.add_argument("--seed", type=int, default=3, help="The Seed used for the Run")
-parser.add_argument("--size", type=str, default="big", choices=["small","big"], help="The Size of the Model")
+parser.add_argument("--experiment", type=str, default="org_identical", help="The Name of the Experiment setting")
+parser.add_argument("--seed", type=int, default=4, help="The Seed used for the Run")
+parser.add_argument("--size", type=str, default="small", choices=["small","big","large"], help="The Size of the Model")
 parser.add_argument("--decoder", type=str, default="small", choices=["small"], help="The Size of the Decoder")
-parser.add_argument("--rewinding", type=str, default="init", choices=["init", "best","dont"], help="The rewinding variation")
+parser.add_argument("--rewinding", type=str, default="best", choices=["init", "best","dont"], help="The rewinding variation")
 # Set Hyperparams for Batches
 parser.add_argument("--batch_size", type=int, default=100, help="The Batchsize used for Training")
 parser.add_argument("--bptt", type=int, default=35, help="The Length of Backpropagation through Time")
 # Set Hyperparams specifying the Model
-# Small: nlayers = 4, nhead = 2
+# Small: nlayers = 2, nhead = 2
 # Big: nlayers = 4, nhead = 4
+# Large: nlayers = 8, nhead = 8
 parser.add_argument("--ntokens", type=int, default=33280, help="The Number of Tokens used by the Model")
 parser.add_argument("--emsize", type=int, default=200, help="The Embedding Dimension used by the Model")
 parser.add_argument("--d_hid", type=int, default=200, help="The Dimension of the FFN Model used in the Encoder")
-parser.add_argument("--nlayers", type=int, default=4, help="The Number of Encoderlayers used in the Encoder")
-parser.add_argument("--nhead", type=int, default=4, help="The Number of Heads used in the Multihead-Attention")
+parser.add_argument("--nlayers", type=int, default=2, help="The Number of Encoderlayers used in the Encoder")
+parser.add_argument("--nhead", type=int, default=2, help="The Number of Heads used in the Multihead-Attention")
 parser.add_argument("--dropout", type=float, default=0.2, help="The Dropout Probability used in the Model")
 # Set Hyperparams defining the Pruning Procedure
 # TODO: Think about adding rewind option and number of warmup steps
@@ -76,8 +77,8 @@ parser.add_argument("--prune_frac", type=float, default=0.20, help="The Fraction
 parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printing-Frequency of Train- and Test Loss during Pruning")
 parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
 # Set Hyperparams defining the Reintroduction Procedure
-parser.add_argument("--choice", type=str, default="old", choices=["old", "rng", "top"], help="The Choice of Reintroductionscheme")
-parser.add_argument("--variation", type=str, default="dynamic", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
+parser.add_argument("--choice", type=str, default="org", choices=["old", "rng", "top","org"], help="The Choice of Reintroductionscheme")
+parser.add_argument("--variation", type=str, default="identical", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
 parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintroduction")  # 50
 parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reintroduction")
 parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reintroduction")
@@ -445,9 +446,9 @@ def pruning_procedure(experiment: str = args.experiment, ) -> None:
             # Masking
             prune_by_percentile(_ite+1, args.prune_frac)
             # Rewind to pruned version of initial state -> optional
-            if "init" in args.rewind and _ite != args.num_prune_cycles-1:
+            if "init" in args.rewinding and _ite != args.num_prune_cycles-1:
                 rewinding(mask, initial_state_dict)
-            elif "best" in args.rewind:
+            elif "best" in args.rewinding:
                 rewinding(mask, best_states[-1])
             # Saving Mask
             mask_list.append(copy.deepcopy(mask))
@@ -502,11 +503,11 @@ def pruning_procedure(experiment: str = args.experiment, ) -> None:
             for j in range(len(mask_temp)):
                 mask[j] = mask_temp[j].to(device)
             # The following completes the Masking and loads the Mask to the desired Device
-            if ("init" in args.rewind) and _ite != args.num_prune_cycles - 1:
+            if ("init" in args.rewinding) and _ite != args.num_prune_cycles - 1:
                 rewinding(mask, initial_state_dict)
-            elif ("best" in args.rewind) and _ite != args.num_prune_cycles - 1:
+            elif ("best" in args.rewinding) and _ite != args.num_prune_cycles - 1:
                 rewinding(mask, best_states[-1])
-            elif ("dont" in args.rewind) and _ite != args.num_prune_cycles - 1:
+            elif ("dont" in args.rewinding) and _ite != args.num_prune_cycles - 1:
                 j = 0
                 for name, param in model.named_parameters():
                     if 'weight' in name:
@@ -582,7 +583,9 @@ def reintroduction(mask_dif:  list, choice: str = args.choice, model_state: int 
     elif choice == "rng":
         supplement = transformer_modell.TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers, args.dropout, args.decoder).state_dict()
     elif choice == "top":
-        supplement = best_states[model_state] #  Supplement is best reached State of corresponding sparsity
+        supplement = best_states[model_state]  # Supplement is best reached State of corresponding sparsity
+    elif choice == "org":
+        supplement = initial_state_dict  # Supplement is the original initialization
     else:
         supplement = None
         print(f"\nI do not know this choice of reintroduction scheme. Please be so kind and teach me.\n")

@@ -12,7 +12,7 @@ from torch.nn import TransformerEncoder, TransformerEncoderLayer
 # Defining the Architecture
 class TransformerModel(nn.Module):
     def __init__(self, ntoken: int, d_model: int, nhead: int, d_hid: int,
-                 nlayers: int, dropout: float = 0.5):
+                 nlayers: int, dropout: float = 0.5, decoder_type:str = "small"):
         super().__init__()
         self.model_type          = 'Transformer'
         self.pos_encoder         = PositionalEncoding(d_model, dropout)
@@ -20,8 +20,14 @@ class TransformerModel(nn.Module):
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
         self.encoder             = nn.Embedding(ntoken, d_model)
         self.d_model             = d_model
-        self.decoder             = nn.Linear(d_model, ntoken)
-
+        if decoder_type == "small":
+            self.decoder = nn.Linear(d_model, ntoken)
+            """
+            elif "medium_decoder" in decoder_type:
+                self.decoder = nn.Sequential(nn.Linear(d_model, 2* d_model), nn.ReLU(), nn.Linear(2* d_model, 2* ntoken), nn.ReLU(), nn.Linear(2* ntoken, ntoken))
+            """
+        else:
+            self.decoder = nn.Linear(d_model, ntoken)
         self.init_weights()
 
     def init_weights(self) -> None:
