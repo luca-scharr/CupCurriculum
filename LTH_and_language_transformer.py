@@ -50,11 +50,11 @@ device =                         T.device("cuda:3" if T.cuda.is_available() else
 
 # Use a Parser to specify Hyperparams etc.
 parser = argparse.ArgumentParser()
-parser.add_argument("--experiment", type=str, default="org_identical", help="The Name of the Experiment setting")
+parser.add_argument("--experiment", type=str, default="old_freezing", help="The Name of the Experiment setting")
 parser.add_argument("--seed", type=int, default=4, help="The Seed used for the Run")
-parser.add_argument("--size", type=str, default="small", choices=["small","big","large"], help="The Size of the Model")
+parser.add_argument("--size", type=str, default="big", choices=["small","big","large"], help="The Size of the Model")
 parser.add_argument("--decoder", type=str, default="small", choices=["small"], help="The Size of the Decoder")
-parser.add_argument("--rewinding", type=str, default="best", choices=["init", "best","dont"], help="The rewinding variation")
+parser.add_argument("--rewinding", type=str, default="init", choices=["init", "best","dont"], help="The rewinding variation")
 # Set Hyperparams for Batches
 parser.add_argument("--batch_size", type=int, default=100, help="The Batchsize used for Training")
 parser.add_argument("--bptt", type=int, default=35, help="The Length of Backpropagation through Time")
@@ -65,43 +65,50 @@ parser.add_argument("--bptt", type=int, default=35, help="The Length of Backprop
 parser.add_argument("--ntokens", type=int, default=33280, help="The Number of Tokens used by the Model")
 parser.add_argument("--emsize", type=int, default=200, help="The Embedding Dimension used by the Model")
 parser.add_argument("--d_hid", type=int, default=200, help="The Dimension of the FFN Model used in the Encoder")
-parser.add_argument("--nlayers", type=int, default=2, help="The Number of Encoderlayers used in the Encoder")
-parser.add_argument("--nhead", type=int, default=2, help="The Number of Heads used in the Multihead-Attention")
+parser.add_argument("--nlayers", type=int, default=4, help="The Number of Encoderlayers used in the Encoder")
+parser.add_argument("--nhead", type=int, default=4, help="The Number of Heads used in the Multihead-Attention")
 parser.add_argument("--dropout", type=float, default=0.2, help="The Dropout Probability used in the Model")
 # Set Hyperparams defining the Pruning Procedure
 # TODO: Think about adding rewind option and number of warmup steps
 # Facebook Paper uses num_prune_cycles = 20 and prune_frac = 0.20 as well as 50,000 updates (overall?)
+parser.add_argument("--prune_variation", type=str, default="random", choices=["lth","random"], help="Pruning variation for Experiments")
 parser.add_argument("--num_prune_cycles", type=int, default=20, help="The Number of Pruning Cycles")  # 20
 parser.add_argument("--num_epochs_prune", type=int, default=50, help="The Number of Epochs per Pruning Cycle")  # 50
 parser.add_argument("--prune_frac", type=float, default=0.20, help="The Fraction of remaining Weights to be pruned in each Iteration")
 parser.add_argument("--print_freq_prune", type=int, default=1, help="The Printing-Frequency of Train- and Test Loss during Pruning")
 parser.add_argument("--test_freq_prune", type=int, default=1, help="The Testing Frequency during Pruning")
 # Set Hyperparams defining the Reintroduction Procedure
-parser.add_argument("--choice", type=str, default="org", choices=["old", "rng", "top","org"], help="The Choice of Reintroductionscheme")
-parser.add_argument("--variation", type=str, default="identical", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
+parser.add_argument("--choice", type=str, default="old", choices=["old", "rng", "top","org"], help="The Choice of Reintroductionscheme")
+parser.add_argument("--variation", type=str, default="freezing", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
 parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintroduction")  # 50
 parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reintroduction")
 parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reintroduction")
 # TODO: Think about adding LR, the Factor used in scheduler, etc.
 parser.add_argument("-v", "--verbosity", action="count", default=1)
-parser.add_argument("--baseline", type=bool, default=False, help="True runs Baseline, False runs Experiment")
+parser.add_argument("--baseline", type=bool, default=False, help="True runs Baseline, False runs Experiment or Miniature")
+parser.add_argument("--miniature", type=bool, default=True, help="True runs Miniature, False runs Experiment")
 args = parser.parse_args()
 
+print("Change File Structure by including /lth in the path.")
 
 # Generate Batches inside the Datasets. NOT SHUFFLED
 train_iter, test_iter, val_iter = WikiText2.iters(batch_size=args.batch_size)  # shape [seq_len, batch_size]
 # Finished preparing the Data
 
+# Organizing file structure
+path_mdl_size = f"{os.getcwd()}/{args.size}_{args.decoder}/"
+path_prune_vr = f"{args.rewinding}/{args.prune_variation}/"
+
 # Building the Model to be trained
-init_file = Path(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/model_state_dicts/initial_state_dict.pth.tar")
+init_file = Path(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/model_state_dicts/initial_state_dict.pth.tar")
 if not init_file.exists():
     model = transformer_modell.TransformerModel(args.ntokens, args.emsize, args.nhead, args.d_hid, args.nlayers, args.dropout, args.decoder)
     model.to(device)
 
     # Copying and Saving Initial State
     initial_state_dict = copy.deepcopy(model.state_dict())
-    utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/model_state_dicts/")
-    T.save(model, f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/model_state_dicts/initial_state_dict.pth.tar")
+    utils.checkdir(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/model_state_dicts/")
+    T.save(model, f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/model_state_dicts/initial_state_dict.pth.tar")
 else:
     model = T.load(init_file)
     model.eval()
@@ -157,11 +164,14 @@ def train_base(epoch: int) -> float:
     return total_loss / (args.batch_size * len(train_iter))
 
 
-# Funktion executing the baseline Experiment
-def baseline(num_iterations: int = 2000, num_checkpoints: int = 40) -> None:
+# Funktion executing the baseline or the miniature Experiment
+def comparison(var:str , num_iterations: int = 2000, num_checkpoints: int = 40) -> None:
     global model
     global optimizer
     global scheduler
+
+    # Making Paths easier
+    path_comp = f"{var}/{args.seed}"
 
     iter_per_checkpoint = int(num_iterations / num_checkpoints)
     iter_not_executed   = num_iterations % num_checkpoints
@@ -179,23 +189,28 @@ def baseline(num_iterations: int = 2000, num_checkpoints: int = 40) -> None:
         # Progressbar
         pbar = tqdm(range(iter_per_checkpoint))
         print()
-        model_file = Path(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
+        model_file = Path(f"{path_mdl_size}{path_comp}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
         if not model_file.exists():
-            print(f"\n--- Checkpoint number [{_ite}/{num_checkpoints} of baseline.{seed}]: ---")
+            print(f"\n--- Checkpoint number [{_ite}/{num_checkpoints} of {var}.{seed}]: ---")
             # Training and Testing cycle
             for iter_ in pbar:
                 # Training
                 print()
-                train_loss = train_base(iter_)
+                if "baseline" in var:
+                    train_loss = train_base(iter_)
+                elif "miniature" in var:
+                    train_loss = train_prune(iter_)
+                else:
+                    print("That should not happen, please use valid option or teach me.")
+                    pass
                 # Testing
                 if iter_ % args.test_freq_prune == 0:
                     val_loss = evaluate()
                     # Save Weights if best
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
-                        utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/best_models/")
-                        T.save(model, f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/best_models/{_ite}_model.pth.tar")
-                        best_state_dict = copy.deepcopy(model.state_dict())
+                        utils.checkdir(f"{path_mdl_size}{path_comp}/saves/best_models/")
+                        T.save(model, f"{path_mdl_size}{path_comp}/saves/best_models/{_ite}_model.pth.tar")
                 # Save training- and validation Loss
                 all_val_loss[iter_]   = val_loss
                 all_train_loss[iter_] = train_loss
@@ -207,14 +222,14 @@ def baseline(num_iterations: int = 2000, num_checkpoints: int = 40) -> None:
             best_val[_ite] = best_val_loss
 
             # Saving Current State
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/model_state_dicts/")
-            T.save(model, f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
+            utils.checkdir(f"{path_mdl_size}{path_comp}/saves/model_state_dicts/")
+            T.save(model, f"{path_mdl_size}{path_comp}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
 
             # Saving State of Optimizer and Scheduler
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/optimizer/")
-            T.save(optimizer.state_dict(), f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/optimizer/opt_{_ite}.pt")
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/scheduler/")
-            T.save(scheduler.state_dict(), f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/scheduler/sched_{_ite}.pt")
+            utils.checkdir(f"{path_mdl_size}{path_comp}/saves/optimizer/")
+            T.save(optimizer.state_dict(), f"{path_mdl_size}{path_comp}/saves/optimizer/opt_{_ite}.pt")
+            utils.checkdir(f"{path_mdl_size}{path_comp}/saves/scheduler/")
+            T.save(scheduler.state_dict(), f"{path_mdl_size}{path_comp}/saves/scheduler/sched_{_ite}.pt")
 
             # Saving relevant Data
             # Plotting training and validation Loss, Iteration Curve
@@ -228,17 +243,17 @@ def baseline(num_iterations: int = 2000, num_checkpoints: int = 40) -> None:
             plt.ylabel("Loss")
             plt.legend()
             plt.grid(color="gray")
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/plots/")
-            plt.savefig(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/plots/TrainingVsValidationLoss_{_ite}.png", dpi=1200)
+            utils.checkdir(f"{path_mdl_size}{path_comp}/plots/")
+            plt.savefig(f"{path_mdl_size}{path_comp}/plots/TrainingVsValidationLoss_{_ite}.png", dpi=1200)
             plt.close()
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/best_val_loss/")
-            T.save(best_val_loss, f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/best_val_loss/checkpoint{_ite}.pt")
+            utils.checkdir(f"{path_mdl_size}{path_comp}/saves/best_val_loss/")
+            T.save(best_val_loss, f"{path_mdl_size}{path_comp}/saves/best_val_loss/checkpoint{_ite}.pt")
 
             # Dump Plot values
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/dumps/train_loss/")
-            all_train_loss.dump(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/dumps/train_loss/all_train_loss_{_ite}.dat")
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/dumps/validation_loss/")
-            all_val_loss.dump(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/dumps/validation_loss/all_val_loss_{_ite}.dat")
+            utils.checkdir(f"{path_mdl_size}{path_comp}/dumps/train_loss/")
+            all_train_loss.dump(f"{path_mdl_size}{path_comp}/dumps/train_loss/all_train_loss_{_ite}.dat")
+            utils.checkdir(f"{path_mdl_size}{path_comp}/dumps/validation_loss/")
+            all_val_loss.dump(f"{path_mdl_size}{path_comp}/dumps/validation_loss/all_val_loss_{_ite}.dat")
         else:
             print(f"Recycling Values from the Run that generated the File: {model_file}")
 
@@ -249,11 +264,11 @@ def baseline(num_iterations: int = 2000, num_checkpoints: int = 40) -> None:
             # Load the Optimizer and Scheduler
             optimizer = T.optim.SGD(model.parameters(), lr=1.0)  # LR here does not matter, as it will be replaced through load state dict
             scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(10, args.test_freq_prune))
-            optimizer.load_state_dict(T.load(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/optimizer/opt_{_ite}.pt"))
-            scheduler.load_state_dict(T.load(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/scheduler/sched_{_ite}.pt"))
+            optimizer.load_state_dict(T.load(f"{path_mdl_size}{path_comp}/saves/optimizer/opt_{_ite}.pt"))
+            scheduler.load_state_dict(T.load(f"{path_mdl_size}{path_comp}/saves/scheduler/sched_{_ite}.pt"))
 
             # Load the best Validation Loss of the Pruningcycle
-            best_val[_ite] = T.load(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/saves/best_val_loss/checkpoint{_ite}.pt")
+            best_val[_ite] = T.load(f"{path_mdl_size}{path_comp}/saves/best_val_loss/checkpoint{_ite}.pt")
 
         # Resetting variables to 0
         best_val_loss  = np.inf
@@ -264,8 +279,8 @@ def baseline(num_iterations: int = 2000, num_checkpoints: int = 40) -> None:
         scheduler.best = float("inf")
 
     # Dumping Values for Plotting
-    utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/dumps/summary_plot_data/")
-    best_val.dump(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/dumps/summary_plot_data/best_val.dat")
+    utils.checkdir(f"{path_mdl_size}{path_comp}/dumps/summary_plot_data/")
+    best_val.dump(f"{path_mdl_size}{path_comp}/dumps/summary_plot_data/best_val.dat")
 
     # Plotting
     a = np.arange(num_checkpoints)
@@ -275,8 +290,8 @@ def baseline(num_iterations: int = 2000, num_checkpoints: int = 40) -> None:
     plt.ylabel("Validation Loss")
     plt.legend()
     plt.grid(color="gray")
-    utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/plots/")
-    plt.savefig(f"{os.getcwd()}/{args.size}_{args.decoder}/baseline/{args.seed}/plots/ValidationLossVsCheckpoints.png", dpi=1200)
+    utils.checkdir(f"{path_mdl_size}{path_comp}/plots/")
+    plt.savefig(f"{path_mdl_size}{path_comp}/plots/ValidationLossVsCheckpoints.png", dpi=1200)
     plt.close()
     pass
 
@@ -345,7 +360,12 @@ def prune_by_percentile(pruning_cycle: int, percent: float) -> None:
             w_c = param.data.cpu()                       # Current Weight
             w_i = (initial_state_dict[name]).data.cpu()  # Initial Weight
             m_w = mask[j].cpu()                          # Mask for this Weight
-            dif = (abs(w_c) - abs(w_i))                  # Difference by wich pruned Weights are decided
+            if "lth" in args.prue_variation:
+                dif = (abs(w_c) - abs(w_i))                  # Difference by wich pruned Weights are decided
+            elif "random" in args.prune_variation:
+                dif = T.rand(m_w.size())
+            else:
+                dif = None
             dif = T.where(m_w != 0.,dif,float("-inf"))   # Make sure that all pruned Weights remain pruned
             b,i = T.sort(dif.view(w_c.numel()))          # i gives the Information needed for pruning, b is irrelevant
             m_w.view(w_c.numel())[i[:round(w_c.numel() * (1-(1-percent)**pruning_cycle))]] = 0  # int better?
@@ -353,6 +373,7 @@ def prune_by_percentile(pruning_cycle: int, percent: float) -> None:
             param.data = (w_c * m_w).to(device)
             mask[j] = m_w.to(device)
             j += 1
+    pass
 
 
 # Function to make an empty mask of the same size as the model
@@ -409,14 +430,13 @@ def pruning_procedure(experiment: str = args.experiment, ) -> None:
         comp1      = utils.print_nonzeros(model)
         comp[_ite] = comp1
 
-        model_file = Path(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
+        model_file = Path(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
         if not model_file.exists():
             print(f"\n--- Pruning Level [{_ite}/{args.num_prune_cycles} of {experiment}.{seed}]: ---")
             # Training and Testing cycle
             for iter_ in pbar:
                 # Training
                 print()
-                #mask
                 train_loss = train_prune(iter_)
                 # Testing
                 if iter_ % args.test_freq_prune == 0:
@@ -424,8 +444,8 @@ def pruning_procedure(experiment: str = args.experiment, ) -> None:
                     # Save Weights if best
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
-                        utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/best_models/")
-                        T.save(model, f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/best_models/{_ite}_model.pth.tar")
+                        utils.checkdir(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/best_models/")
+                        T.save(model, f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/best_models/{_ite}_model.pth.tar")
                         best_state_dict = copy.deepcopy(model.state_dict())
                 # Save training- and validation Loss
                 all_val_loss[iter_]   = val_loss
@@ -441,8 +461,8 @@ def pruning_procedure(experiment: str = args.experiment, ) -> None:
             # Saving Current State
             state_dict.append(copy.deepcopy(model.state_dict()))
             best_states.append(best_state_dict)
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/model_state_dicts/")
-            T.save(model, f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/model_state_dicts/")
+            T.save(model, f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/model_state_dicts/state_dict_{_ite}.pth.tar")
             # Masking
             prune_by_percentile(_ite+1, args.prune_frac)
             # Rewind to pruned version of initial state -> optional
@@ -452,15 +472,15 @@ def pruning_procedure(experiment: str = args.experiment, ) -> None:
                 rewinding(mask, best_states[-1])
             # Saving Mask
             mask_list.append(copy.deepcopy(mask))
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/dumps/masks/")
-            with open(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/dumps/masks/mask_{comp1}.pkl", 'wb') as output_file:
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/dumps/masks/")
+            with open(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/dumps/masks/mask_{comp1}.pkl", 'wb') as output_file:
                 pickle.dump(mask, output_file)
 
             # Saving State of Optimizer and Scheduler
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/optimizer/")
-            T.save(optimizer.state_dict(), f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/optimizer/opt_{_ite}.pt")
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/scheduler/")
-            T.save(scheduler.state_dict(), f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/scheduler/sched_{_ite}.pt")
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/optimizer/")
+            T.save(optimizer.state_dict(), f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/optimizer/opt_{_ite}.pt")
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/scheduler/")
+            T.save(scheduler.state_dict(), f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/scheduler/sched_{_ite}.pt")
 
             # Saving relevant Data
             # Plotting training and validation Loss, Iteration Curve
@@ -474,17 +494,17 @@ def pruning_procedure(experiment: str = args.experiment, ) -> None:
             plt.ylabel("Loss")
             plt.legend()
             plt.grid(color="gray")
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/plots/")
-            plt.savefig(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/plots/TrainingVsValidationLoss_{comp1}.png", dpi=1200)
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/plots/")
+            plt.savefig(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/plots/TrainingVsValidationLoss_{comp1}.png", dpi=1200)
             plt.close()
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/best_val_loss/")
-            T.save(best_val_loss,f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/best_val_loss/prune_cycle{_ite}.pt")
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/best_val_loss/")
+            T.save(best_val_loss,f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/best_val_loss/prune_cycle{_ite}.pt")
 
             # Dump Plot values
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/dumps/train_loss/")
-            all_train_loss.dump(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/dumps/train_loss/all_train_loss_{comp1}.dat")
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/dumps/validation_loss/")
-            all_val_loss.dump(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/dumps/validation_loss/all_val_loss_{comp1}.dat")
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/dumps/train_loss/")
+            all_train_loss.dump(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/dumps/train_loss/all_train_loss_{comp1}.dat")
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/dumps/validation_loss/")
+            all_val_loss.dump(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/dumps/validation_loss/all_val_loss_{comp1}.dat")
         else:
             print(f"Recycling Values from the Run that generated the File: {model_file}")
 
@@ -493,12 +513,12 @@ def pruning_procedure(experiment: str = args.experiment, ) -> None:
             state_dict.append(copy.deepcopy(model.state_dict()))  # Add the State Dictionary to the List of State Dicts
 
             # Load the best Model to the desired Device
-            best_model_file = Path(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/best_models/{_ite}_model.pth.tar")
+            best_model_file = Path(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/best_models/{_ite}_model.pth.tar")
             best_model = T.load(best_model_file, map_location=T.device(device))
             best_states.append(copy.deepcopy(best_model.state_dict()))  # Add the State Dictionary to the List of State Dicts
 
             # Load the Mask
-            with open(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/dumps/masks/mask_{comp1}.pkl", 'rb') as input_file:
+            with open(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/dumps/masks/mask_{comp1}.pkl", 'rb') as input_file:
                 mask_temp = pickle.load(input_file)
             for j in range(len(mask_temp)):
                 mask[j] = mask_temp[j].to(device)
@@ -520,11 +540,11 @@ def pruning_procedure(experiment: str = args.experiment, ) -> None:
             # Load the Optimizer and Scheduler
             optimizer = T.optim.SGD(model.parameters(), lr=1.0)  # LR here does not matter, as it will be replaced through load state dict
             scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(10, args.test_freq_prune))
-            optimizer.load_state_dict(T.load(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/optimizer/opt_{_ite}.pt"))
-            scheduler.load_state_dict(T.load(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/scheduler/sched_{_ite}.pt"))
+            optimizer.load_state_dict(T.load(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/optimizer/opt_{_ite}.pt"))
+            scheduler.load_state_dict(T.load(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/scheduler/sched_{_ite}.pt"))
 
             # Load the best Validation Loss of the Pruningcycle
-            best_val[_ite] = T.load(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/saves/best_val_loss/prune_cycle{_ite}.pt")
+            best_val[_ite] = T.load(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/saves/best_val_loss/prune_cycle{_ite}.pt")
 
 
         # Resetting variables to 0
@@ -536,9 +556,9 @@ def pruning_procedure(experiment: str = args.experiment, ) -> None:
         scheduler.best = float("inf")
 
     # Dumping Values for Plotting
-    utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/dumps/summary_plot_data/")
-    comp.dump(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/dumps/summary_plot_data/compression.dat")
-    best_val.dump(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/dumps/summary_plot_data/best_val.dat")
+    utils.checkdir(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/dumps/summary_plot_data/")
+    comp.dump(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/dumps/summary_plot_data/compression.dat")
+    best_val.dump(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/dumps/summary_plot_data/best_val.dat")
 
     # Plotting
     a = np.arange(args.num_prune_cycles)
@@ -549,8 +569,8 @@ def pruning_procedure(experiment: str = args.experiment, ) -> None:
     plt.xticks(a, comp, rotation="vertical")
     plt.legend()
     plt.grid(color="gray")
-    utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/plots/")
-    plt.savefig(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/pruning/{args.seed}/plots/ValidationLossVsWeights.png", dpi=1200)
+    utils.checkdir(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/plots/")
+    plt.savefig(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/plots/ValidationLossVsWeights.png", dpi=1200)
     plt.close()
 
 
@@ -699,7 +719,7 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = args.ch
         comp1            = utils.print_nonzeros(model)
         comp[reint_step] = comp1
 
-        model_file = Path(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/model_reint_state_dicts/reint_state_dict_{reint_step}.pth.tar")
+        model_file = Path(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/model_reint_state_dicts/reint_state_dict_{reint_step}.pth.tar")
         if not model_file.exists():
             print(f"\n--- Reintroduction Level [{reint_step}/{len(s_d_mask_list)} of {experiment}.{seed}]: ---")
             # Training and Testing cycle
@@ -713,8 +733,8 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = args.ch
                     # Save Weights if best (might be unneccessary)
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
-                        utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/best_model_reint/")
-                        T.save(model, f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/best_model_reint/{reint_step}_model.pth.tar")
+                        utils.checkdir(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/best_model_reint/")
+                        T.save(model, f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/best_model_reint/{reint_step}_model.pth.tar")
                 # Save training- and validation Loss
                 all_val_loss[__iter] = val_loss
                 all_train_loss[__iter] = train_loss
@@ -727,14 +747,14 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = args.ch
 
             # Saving Current State
             # reint_state_dict.append(copy.deepcopy(model.state_dict()))
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/model_reint_state_dicts/")
-            T.save(model, f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/model_reint_state_dicts/reint_state_dict_{reint_step}.pth.tar")
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/model_reint_state_dicts/")
+            T.save(model, f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/model_reint_state_dicts/reint_state_dict_{reint_step}.pth.tar")
 
             # Saving State of Optimizer and Scheduler
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/optimizer_reint/")
-            T.save(optimizer.state_dict(), f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/optimizer_reint/opt_{reint_step}.pt")
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/scheduler_reint/")
-            T.save(scheduler.state_dict(), f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/scheduler_reint/sched_{reint_step}.pt")
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/optimizer_reint/")
+            T.save(optimizer.state_dict(), f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/optimizer_reint/opt_{reint_step}.pt")
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/scheduler_reint/")
+            T.save(scheduler.state_dict(), f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/scheduler_reint/sched_{reint_step}.pt")
 
             # Saving relevant Data
             # Plotting training and validation Loss, Iteration Curve
@@ -748,17 +768,17 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = args.ch
             plt.ylabel("Loss")
             plt.legend()
             plt.grid(color="gray")
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/plots/")
-            plt.savefig(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/plots/TrainingVsValidationLoss_{comp1}.png", dpi=1200)
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/plots/")
+            plt.savefig(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/plots/TrainingVsValidationLoss_{comp1}.png", dpi=1200)
             plt.close()
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/best_val_loss_reint/")
-            T.save(best_val_loss, f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/best_val_loss_reint/reint_step{reint_step}.pt")
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/best_val_loss_reint/")
+            T.save(best_val_loss, f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/best_val_loss_reint/reint_step{reint_step}.pt")
 
             # Dump Plot values
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/dumps/train_loss_reint/")
-            all_train_loss.dump(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/dumps/train_loss_reint/all_train_loss_{comp1}.dat")
-            utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/dumps/validation_loss_reint/")
-            all_val_loss.dump(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/dumps/validation_loss_reint/all_val_loss_{comp1}.dat")
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/dumps/train_loss_reint/")
+            all_train_loss.dump(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/dumps/train_loss_reint/all_train_loss_{comp1}.dat")
+            utils.checkdir(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/dumps/validation_loss_reint/")
+            all_val_loss.dump(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/dumps/validation_loss_reint/all_val_loss_{comp1}.dat")
         else:
             print(f"Recycling Values from the Run that generated the File: {model_file}")
 
@@ -771,11 +791,11 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = args.ch
             # Load the Optimizer and Scheduler
             optimizer = T.optim.SGD(model.parameters(), lr= 1.0)  # LR here does not matter, as it will be replaced through load state dict
             scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(10, args.test_freq_prune))
-            optimizer.load_state_dict(T.load(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/optimizer_reint/opt_{reint_step}.pt"))
-            scheduler.load_state_dict(T.load(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/scheduler_reint/sched_{reint_step}.pt"))
+            optimizer.load_state_dict(T.load(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/optimizer_reint/opt_{reint_step}.pt"))
+            scheduler.load_state_dict(T.load(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/scheduler_reint/sched_{reint_step}.pt"))
 
             # Load the best Validation Loss of the Pruningcycle
-            best_val[reint_step] = T.load(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/saves/best_val_loss_reint/reint_step{reint_step}.pt")
+            best_val[reint_step] = T.load(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/saves/best_val_loss_reint/reint_step{reint_step}.pt")
 
         # Resetting variables to 0
         best_val_loss  = np.inf
@@ -783,9 +803,9 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = args.ch
         all_val_loss   = np.zeros(args.num_epochs_reint, float)
 
     # Dumping Values for Plotting
-    utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/dumps/reint_summary_plot_data/")
-    comp.dump(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/dumps/reint_summary_plot_data/compression.dat")
-    best_val.dump(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/dumps/reint_summary_plot_data/best_val.dat")
+    utils.checkdir(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/dumps/reint_summary_plot_data/")
+    comp.dump(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/dumps/reint_summary_plot_data/compression.dat")
+    best_val.dump(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/dumps/reint_summary_plot_data/best_val.dat")
 
     # Plotting
     a = np.arange(len(s_d_mask_list))
@@ -796,8 +816,8 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = args.ch
     plt.xticks(a, comp, rotation="vertical")
     plt.legend()
     plt.grid(color="gray")
-    utils.checkdir(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/plots/")
-    plt.savefig(f"{os.getcwd()}/{args.size}_{args.decoder}/{args.rewinding}/reintroduction/{args.experiment}/{args.seed}/plots/ValidationLossVsWeights.png", dpi=1200)
+    utils.checkdir(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/plots/")
+    plt.savefig(f"{path_mdl_size}{path_prune_vr}reintroduction/{args.experiment}/{args.seed}/plots/ValidationLossVsWeights.png", dpi=1200)
     plt.close()
 
 
@@ -816,7 +836,17 @@ np.random.seed(seed)
 # Main
 def main(experiment: str = args.experiment, choice: str = args.choice, variation: str = args.variation) -> None:
     if args.baseline:
-        baseline()
+        comparison("baseline")
+    elif args.miniature:
+        mask_file = Path(f"{path_mdl_size}{path_prune_vr}pruning/{args.seed}/dumps/masks/mask_1.4.pkl")
+        if mask_file.exists():
+            with open(mask_file, 'rb') as input_file:
+                mask_temp = pickle.load(input_file)
+            for j in range(len(mask_temp)):
+                mask[j] = mask_temp[j].to(device)
+            comparison("miniature")
+        else:
+            print("Miniature Experiment failed, it looks like mask_file is missing. Please help.")
     else:
         print(f"Using device: {device}")
         starting_time = time.perf_counter()
@@ -832,6 +862,7 @@ def main(experiment: str = args.experiment, choice: str = args.choice, variation
 
         # Show Timings
         print(f"Runtime overall {time_reintroduction - starting_time} [s]")
+    pass
 
 
 if __name__ == "__main__":
