@@ -15,7 +15,7 @@ rng = np.random.default_rng(3)
 parser = argparse.ArgumentParser()
 parser.add_argument("--size", type=str, default="small", choices=["small","big","large"], help="The Size of the Model")
 parser.add_argument("--rewinding", type=str, default="init", choices=["init", "best","dont", "warm"], help="The rewinding variation")
-parser.add_argument("--prune_variation", type=str, default="random", choices=["lth","random"], help="Pruning variation for Experiments")
+parser.add_argument("--prune_variation", type=str, default="lth", choices=["lth","random"], help="Pruning variation for Experiments")
 parser.add_argument("--choice", type=str, default="old", choices=["old", "rng", "top","org"], help="The Choice of Reintroductionscheme")
 parser.add_argument("--variation", type=str, default="identical", choices=["dynamic", "freezing", "identical"], help="The Variation of subsequent Trainingscheme")
 parser.add_argument("--baseline", type=bool, default=False, help="True runs Baseline, False runs Experiment or Miniature")
@@ -159,7 +159,7 @@ def mean_var(path: str, variations: list, choices: list) -> None:
     c_v_val = np.full((5, 20), np.inf)
     for i in range(5):
         with open(f"{path}/pruning/{i}/dumps/summary_plot_data/best_val.dat", "rb") as input_file:
-            c_v_val[i] = pickle.load(input_file)
+            c_v_val[i] = np.flip(pickle.load(input_file))
     a_valid_l = np.concatenate((a_valid_l[None,:], c_v_val[None,:]))
     labels.append("pruning")
     for v in variations:
@@ -167,7 +167,7 @@ def mean_var(path: str, variations: list, choices: list) -> None:
             c_v_val = np.full((5, 20), np.inf)
             for i in range(5):
                 with open(f"{path}/reintroduction/{c+'_'+v}/{i}/dumps/reint_summary_plot_data/best_val.dat", "rb") as input_file:
-                    c_v_val[i] = np.flip(pickle.load(input_file))
+                    c_v_val[i] = pickle.load(input_file)
             a_valid_l = np.concatenate((a_valid_l, c_v_val[None,:]))
             labels.append(f"{translation[c]} {v}")
     a_valid_l = a_valid_l[1:]
@@ -187,7 +187,7 @@ def mean_var(path: str, variations: list, choices: list) -> None:
     fig.suptitle(f"Validation Loss Vs Introduction step")
     ax.set_xlabel("Unpruned Weights Percentage")
     ax.set_ylabel("Cross Entropy Loss")
-    ax.set_xticks(range(20), comp, rotation="vertical")
+    ax.set_xticks(range(20), np.flip(np.asarray(comp)), rotation="vertical")
     for i,label in enumerate(labels):
         ls = "--" if "freezing" in label else "-"
         ax.plot(t, a_valid_l_mean[i], ls = ls, label=label)
@@ -349,6 +349,6 @@ print(f"Running plot generator for {args.size}_small/{args.rewinding}/{args.prun
 #        errorbar_overfitting(comp, path, exp, v, ch)
 #box_dif_old_dyn(["small","big","large"], ["init", "best","dont", "warm"], ["lth","random"])
 #box_dif(path, ["freezing", "dynamic", "identical"], ["rng", "org", "old", "top"])
-#mean_var(path, ["dynamic", "identical", "freezing"], ["old", "rng", "top","org"])
-errorbar_overfitting_baseline(path_baseline, "baseline")
-errorbar_overfitting_baseline(path_miniature, "miniature")
+mean_var(path, ["dynamic", "identical", "freezing"], ["old", "rng", "top","org"])
+#errorbar_overfitting_baseline(path_baseline, "baseline")
+#errorbar_overfitting_baseline(path_miniature, "miniature")
