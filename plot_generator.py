@@ -83,13 +83,12 @@ def errorbar_overfitting(comp: list, path: str, experiment: str, v: str, ch: str
     t = range(2000)
     fig = plt.figure()
     ax = fig.add_subplot()
-    ax.plot(t, a_train_l_mean, c = 'blue', label=f"training_loss")
+    ax.plot(t, a_train_l_mean, c = 'blue', label=f"training loss")
     ax.fill_between(t, a_train_l_mean + a_train_l_std, a_train_l_mean - a_train_l_std, facecolor='blue', alpha=0.5)
-    ax.plot(t, a_valid_l_mean, c = 'green', label=f"validation_loss")
+    ax.plot(t, a_valid_l_mean, c = 'green', label=f"validation loss")
     ax.fill_between(t, a_valid_l_mean + a_valid_l_std, a_valid_l_mean - a_valid_l_std, facecolor='green', alpha=0.5)
-    fig.suptitle(f"Training and Validation Loss Vs Iterations for\n"
-                 f"the {args.size} model with \'{translation[args.rewinding]}\' rewinding,\n"
-                 f"{translation[args.prune_variation]} pruning and\n"
+    fig.suptitle(f"Training and Validation Loss Vs Iterations for the {args.size} model\n"
+                 f"with \'{translation[args.rewinding]}\' rewinding, {translation[args.prune_variation]} pruning and\n"
                  f" the {translation[ch]} {v} variation of the Cup Curriculum")
     ax.set_xlabel("Iterations")
     ax.set_ylabel("Cross Entropy Loss")
