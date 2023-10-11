@@ -1,5 +1,7 @@
 # Cup Curriculum: Curriculum Learning on Model Capacity
 
+[Show Image](Figures/Cup Shape and Main Result.pdf)
+
 This repository presents the code corresponding to the paper [*Cup Curriculum: Curriculum Learning on Model Capacity*](NoLinkBecauseDubbleBlindReviewInProgress).
 As highlighted in the paper, the *cup curriculum* is a curriculum learning approach focussing on the model capacity.
 The analysis of different variations of the cup curriculum is done in a natural language processing setting.
@@ -12,7 +14,6 @@ In addition to this result, we observe from both the cup curriculum and early st
     <figcaption>(Left) Model capacity throughout training with the cup curriculum. (Right) Relative performance increase of the best performing cup curriculum strategy observed over the best performance of 20 early stopping runs per model size. The red line marks early stopping, the grey line the relative performance increase of the best model found by IMP.</figcaption>
   </center>
 </figure>
-[Show Image](Figures/Cup Shape and Main Result.pdf)
 
 
 The following gives an overview of the cup curriculum and tries to explain which functions you need to manipulate to adjust my code propperly.
