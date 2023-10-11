@@ -12,6 +12,7 @@ In addition to this result, we observe from both the cup curriculum and early st
     <figcaption>(Left) Model capacity throughout training with the cup curriculum. (Right) Relative performance increase of the best performing cup curriculum strategy observed over the best performance of 20 early stopping runs per model size. The red line marks early stopping, the grey line the relative performance increase of the best model found by IMP.</figcaption>
   </center>
 </figure>
+[Show Image](Figures/Cup Shape and Main Result.pdf)
 
 
 The following gives an overview of the cup curriculum and tries to explain which functions you need to manipulate to adjust my code propperly.
