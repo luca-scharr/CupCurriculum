@@ -1,6 +1,6 @@
 # Cup Curriculum: Curriculum Learning on Model Capacity
 
-[Show Image](Figures/Cup Shape and Main Result.pdf)
+[Show Image](./Figures/Cup Shape and Main Result.pdf)
 
 This repository presents the code corresponding to the paper [*Cup Curriculum: Curriculum Learning on Model Capacity*](NoLinkBecauseDubbleBlindReviewInProgress).
 As highlighted in the paper, the *cup curriculum* is a curriculum learning approach focussing on the model capacity.
