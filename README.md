@@ -13,12 +13,6 @@ In addition to this result, we observe from both the cup curriculum and early st
   </center>
 </figure>
 
-<object data="Figures/Cup Shape and Main Result.pdf" type="application/pdf">
-    <embed src="Figures/Cup Shape and Main Result.pdf">
-    </embed>
-</object>
-
-
 
 The following gives an overview of the cup curriculum and tries to explain which functions you need to manipulate to adjust my code propperly.
 A formal definition of the cup curriculum can be found in the corresponding paper.
