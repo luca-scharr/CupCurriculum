@@ -1,4 +1,3 @@
-# ANCHOR Libraries
 import numpy as np
 import os
 import pickle
@@ -6,7 +5,6 @@ import matplotlib.pyplot as plt
 import time
 
 
-# Print table of zeros and non-zeros count
 def print_nonzeros(model):
     nonzero = total = 0
     for name, p in model.named_parameters():
