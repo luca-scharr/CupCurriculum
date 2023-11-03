@@ -20,7 +20,7 @@ The cup curriculum consists of two training phases, one reduces the model capaci
 The first phase of training currently uses a variation of iterative magnitude pruning to reduce model capacity.
 The pruned weights are reintroduced in a second phase, resulting in the model capacity to show a cup-shaped curve over the training iterations (see Fig.1 left).
 
-LTH_and_language_transformer implements the combination of the Lottery Ticket Hypothesis Paper with the transformer tutorial of pytorch.
-Main is currently used to execute this script.
-Utilities defines a simple helper function, I plan on expanding it.
-The remaining .py documents aren't used jet.
+CupCurriculum.py implements the cup curriculum based on the Lottery Ticket Hypothesis [Paper](https://openreview.net/pdf?id=rJl-b3RcF7) and [this](https://pytorch.org/tutorials/beginner/transformer_tutorial.html) transformer tutorial of pytorch.
+Main.py is used to execute CupCurriculum.py's main().
+Utilities.py defines simple helper functions used for file managment and plots.
+Lastly plots.py provides functions for different visualization of the achieved results.
