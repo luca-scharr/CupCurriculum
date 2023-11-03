@@ -1,8 +1,8 @@
-import LTH_and_language_transformer as LTH
+import CupCurriculum as cup
 
 
 def main():
-    LTH.main()
+    cup.main()
 
 
 if __name__ == "__main__":
