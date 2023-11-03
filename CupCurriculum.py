@@ -46,7 +46,7 @@ import transformer_modell
 sns.set_style('darkgrid')
 
 # Setting the computing device
-device =                         T.device("cuda:3" if T.cuda.is_available() else "cpu")
+device = T.device("cuda:3" if T.cuda.is_available() else "cpu")
 
 # Use a Parser to specify Hyperparams etc.
 parser = argparse.ArgumentParser()
@@ -60,7 +60,7 @@ parser.add_argument("--batch_size", type=int, default=100, help="The Batchsize u
 parser.add_argument("--bptt", type=int, default=35, help="The Length of Backpropagation through Time")
 # Set Hyperparams specifying the Model
 # Small: nlayers = 2, nhead = 2
-# Big: nlayers = 4, nhead = 4
+# Medium: nlayers = 4, nhead = 4
 # Large: nlayers = 8, nhead = 8
 parser.add_argument("--ntokens", type=int, default=33280, help="The Number of Tokens used by the Model")
 parser.add_argument("--emsize", type=int, default=200, help="The Embedding Dimension used by the Model")
@@ -69,8 +69,6 @@ parser.add_argument("--nlayers", type=int, default=4, help="The Number of Encode
 parser.add_argument("--nhead", type=int, default=4, help="The Number of Heads used in the Multihead-Attention")
 parser.add_argument("--dropout", type=float, default=0.2, help="The Dropout Probability used in the Model")
 # Set Hyperparams defining the Pruning Procedure
-# TODO: Think about adding rewind option and number of warmup steps
-# Facebook Paper uses num_prune_cycles = 20 and prune_frac = 0.20 as well as 50,000 updates (overall?)
 parser.add_argument("--prune_variation", type=str, default="random", choices=["lth","random"], help="Pruning variation for Experiments")
 parser.add_argument("--num_prune_cycles", type=int, default=20, help="The Number of Pruning Cycles")  # 20
 parser.add_argument("--num_epochs_prune", type=int, default=50, help="The Number of Epochs per Pruning Cycle")  # 50
@@ -83,15 +81,13 @@ parser.add_argument("--variation", type=str, default="freezing", choices=["dynam
 parser.add_argument("--num_epochs_reint", type=int, default=50, help="The Number of Epochs per Reintroduction")  # 50
 parser.add_argument("--print_freq_reint", type=int, default=1, help="The Printing Frequency of Train- and Test Loss durinig Reintroduction")
 parser.add_argument("--test_freq_reint", type=int, default=1, help="The Testing Frequency during Reintroduction")
-# TODO: Think about adding LR, the Factor used in scheduler, etc.
+# Possible extension: optimize for lr, lr scheduler, factor used in scheduler, and other updating hyperparameters
 parser.add_argument("-v", "--verbosity", action="count", default=1)
 parser.add_argument("--baseline", type=bool, default=False, help="True runs Baseline, False runs Experiment or Miniature")
 parser.add_argument("--miniature", type=bool, default=True, help="True runs Miniature, False runs Experiment")
 args = parser.parse_args()
 
-print("Change File Structure by including /lth in the path.")
-
-# Generate Batches inside the Datasets. NOT SHUFFLED
+# Generates the iterators used for training, validation, and testing. Exchange for your dataset
 train_iter, test_iter, val_iter = WikiText2.iters(batch_size=args.batch_size)  # shape [seq_len, batch_size]
 # Finished preparing the Data
 
@@ -124,11 +120,10 @@ best_states = []
 
 # Specify the objective Function
 criterion = nn.CrossEntropyLoss()  # Gets returned as Loss
-lr        = 5.0  # learning rate
-# Stated in Successfully applying ... (Aachen) Adafactor gives better results than Adam, they include warmup after reset
+lr        = 5.0  # Learning rate
 optimizer = opt.SGD(model.parameters(), lr=lr)
 scheduler = opt.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(10, args.test_freq_prune))
-# lr = 5.0 and factor = 0.95 gives a maximum of 333 updates to lr before the update gets smaler than 1e-8
+# lr = 5.0 and factor = 0.95 gives a minimum of 333 updates to lr before the update gets smaler than 1e-8
 # Finished specifying the objective Function
 
 
@@ -164,7 +159,7 @@ def train_base(epoch: int) -> float:
     return total_loss / (args.batch_size * len(train_iter))
 
 
-# Funktion executing the baseline or the miniature Experiment
+# Funktion executing the baseline and the miniature Experiment (as specified by var)
 def comparison(var:str , num_iterations: int = 2000, num_checkpoints: int = 40) -> None:
     global model
     global optimizer
@@ -361,7 +356,7 @@ def prune_by_percentile(pruning_cycle: int, percent: float) -> None:
             w_i = (initial_state_dict[name]).data.cpu()  # Initial Weight
             m_w = mask[j].cpu()                          # Mask for this Weight
             if "lth" in args.prue_variation:
-                dif = (abs(w_c) - abs(w_i))                  # Difference by wich pruned Weights are decided
+                dif = (abs(w_c) - abs(w_i))              # Difference by wich pruned Weights are decided
             elif "random" in args.prune_variation:
                 dif = T.rand(m_w.size())
             else:
@@ -638,28 +633,28 @@ def train_reintro(sym_dif_list: list, epoch: int, mask_num: int, variation: str 
             # Manipulating the learningrate according to reintroduction time
             i = 0
             for mask_difference in sym_dif_list:
-                factor = (1./0.95)**(i+1)  # The LR prior to the current LR, up for discussion; 0.95 = factor in Scheduler
-                i     += 1                 # Count pos in list; not using enumerate() as this way is more flexible. CHANGE?
+                factor = (1./0.95)**(i+1)  # The LR for capacity pruned in the prior pruning step
+                i     += 1                 # Count pos in list; not using enumerate() as this way is more flexible. 
                 j      = 0                 # Used to match position in mask with layer in the network
-                for name, p in model.named_parameters():  # Vektorisieren nachscahuen; Pytorch discussion seite
+                for name, p in model.named_parameters():  # Could benefit from vektorization
                     if 'weight' in name:
                         # Change this Part to adjust the learningrate
                         p.grad.data[mask_difference[j]] = p.grad.data[mask_difference[j]]*factor
                         j += 1
             j=0
-            for name, p in model.named_parameters():  # Vektorisieren nachscahuen; Pytorch discussion seite
+            for name, p in model.named_parameters():  # Could benefit from vektorization
                 if 'weight' in name:
                     p.grad.data = p.grad.data * mask_list[-(mask_num+1)][j]
                     j+=1
         elif variation == "freezing":
             j = 0
-            for name, p in model.named_parameters():  # Vektorisieren nachscahuen; Pytorch discussion seite
+            for name, p in model.named_parameters():  # Could benefit from vektorization
                 if 'weight' in name:
                     p.grad.data = p.grad.data * sym_dif_list[-1][j]
                     j += 1
         elif variation == "identical":
             j = 0
-            for name, p in model.named_parameters():  # Vektorisieren nachscahuen; Pytorch discussion seite
+            for name, p in model.named_parameters():  # Could benefit from vektorization
                 if 'weight' in name:
                     p.grad.data = p.grad.data * mask_list[-(mask_num + 1)][j]
                     j += 1
@@ -786,8 +781,6 @@ def regaining_procedure(experiment: str = args.experiment, choice: str = args.ch
             model = T.load(model_file)
             model.to(device)
             model.train()
-            # reint_state_dict.append(copy.deepcopy(model.state_dict()))  # Add the State Dictionary to the List of Reintroduction State Dicts
-
             # Load the Optimizer and Scheduler
             optimizer = T.optim.SGD(model.parameters(), lr= 1.0)  # LR here does not matter, as it will be replaced through load state dict
             scheduler = T.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=max(10, args.test_freq_prune))
@@ -851,7 +844,7 @@ def main(experiment: str = args.experiment, choice: str = args.choice, variation
         print(f"Using device: {device}")
         starting_time = time.perf_counter()
         # Pruning Procedure
-        pruning_procedure(experiment)  # The Literature finds rewinding improving the performance when rewinded to warmup state
+        pruning_procedure(experiment)
         time_pruning = time.perf_counter()
         print(f"Runtime of the pruning procedure {time_pruning-starting_time} [s]")
 
