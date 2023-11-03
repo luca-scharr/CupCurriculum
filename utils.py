@@ -4,7 +4,7 @@ import pickle
 import matplotlib.pyplot as plt
 import time
 
-
+# This function is taken from https://github.com/rahulvigneswaran/Lottery-Ticket-Hypothesis-in-Pytorch/tree/master
 def print_nonzeros(model):
     nonzero = total = 0
     for name, p in model.named_parameters():
