@@ -22,5 +22,5 @@ The pruned weights are reintroduced in a second phase, resulting in the model ca
 
 CupCurriculum.py implements the cup curriculum based on the Lottery Ticket Hypothesis [Paper](https://openreview.net/pdf?id=rJl-b3RcF7), [this](https://github.com/rahulvigneswaran/Lottery-Ticket-Hypothesis-in-Pytorch/tree/master) repository, and [this](https://pytorch.org/tutorials/beginner/transformer_tutorial.html) transformer tutorial of pytorch.
 Main.py is used to execute CupCurriculum.py's main().
-Utilities.py defines simple helper functions used for file managment and plots.
+Utilities.py defines simple helper functions used for file management and plots.
 Lastly plot_generator.py provides functions for different visualization of the achieved results.
